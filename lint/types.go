@@ -21,3 +21,11 @@ func (r ResourceSchema) ArgumentNames() []string {
 	}
 	return names
 }
+
+func (r ResourceSchema) AttributeNames() []string {
+	var names []string
+	for k, _ := range r.Fields {
+		names = append(names, k)
+	}
+	return names
+}
