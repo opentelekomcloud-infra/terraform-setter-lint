@@ -9,7 +9,7 @@ import (
 	"github.com/opentelekomcloud-infra/terraform-setter-lint/lint"
 )
 
-const help = "Simple lint checking that all resource attribute setters have" +
+const help = "Simple lint checking that all resource attribute setters have " +
 	"corresponding attributes in the resource schema.\n\n" +
 	"\u001B[1mUsage:\u001B[0m\n  terraform-setter-lint \u001B[2m[path]\u001B[0m\n\n" +
 	"\u001B[1mArguments:\u001B[0m\n" +
