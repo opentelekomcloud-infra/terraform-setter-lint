@@ -80,7 +80,23 @@ func GetGeneratorSchema(genFn *ast.FuncDecl) (*ResourceSchema, error) {
 			return nil, fmt.Errorf("invalid schema key (not a string): %v", key.Value)
 		}
 		keyName := strings.Trim(key.Value, `"`)
-		field := parseField(elem.Value.(*ast.CompositeLit))
+		var field Field
+		switch v := elem.Value.(type) {
+		case *ast.CompositeLit:
+			field = parseField(v)
+		case *ast.CallExpr:
+			// for us `tags` are a special case
+			if keyName == "tags" {
+				field = Field{
+					Type:     "TypeMap",
+					ReadOnly: false,
+				}
+			} else {
+				log.Printf("`%s` is not a tag, but defined in via function call", keyName)
+			}
+		default:
+			log.Printf("field `%s` has unsupported type", keyName)
+		}
 		schema.Fields[keyName] = field
 	}
 	return schema, nil
