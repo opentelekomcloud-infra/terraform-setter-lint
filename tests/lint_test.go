@@ -93,6 +93,18 @@ func TestListingSchemaFields(t *testing.T) {
 	)
 }
 
+func TestFieldsFromCall(t *testing.T) {
+	gens, err := lint.ResourceGenerators(fixturePath("call"))
+	assert.Len(t, gens, 1)
+
+	filePath := filepath.Join(fixturePath("call"), "example.go")
+	sch, err := lint.GetGeneratorSchema(gens[filePath])
+	require.NoError(t, err)
+
+	assert.Equal(t, "TypeMap", sch.Fields["tags"].Type)
+	assert.Equal(t, false, sch.Fields["tags"].ReadOnly)
+}
+
 func TestFindFieldSetters(t *testing.T) {
 	filePath := filepath.Join(fixturePath("good"), "example.go")
 	setters, err := lint.FindFieldSetters(filePath)
