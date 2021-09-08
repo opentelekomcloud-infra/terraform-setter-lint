@@ -19,7 +19,7 @@ func findPackages(path string) ([]*ast.Package, error) {
 
 	var packs []*ast.Package
 	err := filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
-		if !d.IsDir() {
+		if d == nil || !d.IsDir() {
 			return nil
 		}
 		pMap, err := parser.ParseDir(set, p, nil, 0)
