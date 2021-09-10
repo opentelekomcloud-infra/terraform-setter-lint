@@ -13,6 +13,7 @@ import (
 	"github.com/opentelekomcloud/gophertelekomcloud/openstack/identity/v3/roles"
 	"github.com/opentelekomcloud/gophertelekomcloud/pagination"
 
+	"github.com/opentelekomcloud/terraform-provider-opentelekomcloud/opentelekomcloud/common"
 	"github.com/opentelekomcloud/terraform-provider-opentelekomcloud/opentelekomcloud/common/cfg"
 	"github.com/opentelekomcloud/terraform-provider-opentelekomcloud/opentelekomcloud/common/fmterr"
 )
@@ -65,8 +66,28 @@ func ResourceIdentityRoleAssignmentV3() *schema.Resource {
 				Type:     schema.TypeString,
 				Computed: true,
 			},
+
+			"localWithReturn":     localFieldIp(),
+			"localWithAssignment": localField(),
+
+			"tags": common.TagsSchema(),
+
 		},
 	}
+}
+
+func localFieldIp() *schema.Schema {
+	return &schema.Schema{
+		Type:     schema.TypeString,
+		Optional: true,
+	}
+}
+func localField() *schema.Schema {
+	val := &schema.Schema{
+		Type:     schema.TypeString,
+		Computed: true,
+	}
+	return val
 }
 
 func resourceIdentityRoleAssignmentV3Create(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {

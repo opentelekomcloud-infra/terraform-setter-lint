@@ -17,7 +17,7 @@ const help = "Simple lint checking that all resource attribute setters have " +
 
 func init() {
 	flag.Usage = func() {
-		_, _ = fmt.Fprintf(flag.CommandLine.Output(), help)
+		_, _ = fmt.Fprint(flag.CommandLine.Output(), help)
 		flag.PrintDefaults()
 	}
 }
