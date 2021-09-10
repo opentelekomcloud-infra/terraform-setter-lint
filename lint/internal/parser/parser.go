@@ -107,7 +107,7 @@ func (p Parser) schemaDeclToMap(schemaDecl *ast.CompositeLit) (map[string]genera
 }
 
 func parseComposite(lit *ast.CompositeLit) (*generators.Field, error) {
-	f := &generators.Field{ReadOnly: true}
+	f := &generators.Field{}
 	for i, el := range lit.Elts {
 		kv, ok := el.(*ast.KeyValueExpr)
 		if !ok {
@@ -120,15 +120,6 @@ func parseComposite(lit *ast.CompositeLit) (*generators.Field, error) {
 				return nil, fmt.Errorf("invalid `Type` field of %s", name)
 			}
 			f.Type = val.Sel.String()
-		}
-		if name == "Optional" || name == "Required" {
-			val, ok := kv.Value.(*ast.Ident)
-			if !ok {
-				return nil, fmt.Errorf("unknown `Optional`/`Required` argument type")
-			}
-			if val.Name == "true" {
-				f.ReadOnly = false
-			}
 		}
 	}
 	return f, nil
