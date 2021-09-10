@@ -38,7 +38,10 @@ func copyFile(src, dest string) error {
 }
 
 func copyDir(src, dest string) error {
-	return filepath.Walk(src, func(p string, i fs.FileInfo, err error) error {
+	return filepath.Walk(src, func(p string, i fs.FileInfo, e error) error {
+		if e != nil {
+			return e
+		}
 		if i.IsDir() {
 			return nil
 		}
@@ -70,7 +73,7 @@ func TestMain(m *testing.M) {
 	defer func() {
 		log.Print("Removing temporary test dir")
 		if err := os.RemoveAll(tmpDir); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, err.Error())
+			_, _ = fmt.Fprint(os.Stderr, err.Error())
 		}
 		os.Exit(retCode)
 	}()
