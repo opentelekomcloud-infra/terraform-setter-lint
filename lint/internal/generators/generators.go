@@ -13,9 +13,7 @@ import (
 )
 
 type Field struct {
-	ResourceName string
-	Type         string
-	ReadOnly     bool
+	Type string
 }
 
 type Generator struct {
