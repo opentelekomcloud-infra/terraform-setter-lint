@@ -12,8 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/go-multierror"
 	"github.com/opentelekomcloud-infra/terraform-setter-lint/lint"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var cwd string
@@ -96,6 +98,26 @@ func TestValidatePositive(t *testing.T) {
 	assert.NoError(t, lint.Validate(fixturePath("good")))
 }
 
-func TestValidateNegative(t *testing.T) {
-	assert.Error(t, lint.Validate(fixturePath("loose_assignment")))
+func TestValidateNegativeLooseSet(t *testing.T) {
+	err := lint.Validate(fixturePath("loose_assignment"))
+	require.Error(t, err)
+	me := err.(*multierror.Error)
+	assert.Len(t, me.Errors, 1)
+}
+
+func TestValidateNegativeBadTypes(t *testing.T) {
+	err := lint.Validate(fixturePath("bad_types"))
+	require.Error(t, err)
+	t.Log(err)
+	me := err.(*multierror.Error)
+	assert.Len(t, me.Errors, 2)
+}
+
+func TestValidateAcceptance(t *testing.T) {
+	err := lint.Validate(fixturePath("complicated"))
+	require.NoError(t, err)
+}
+func TestValidateAcceptance2(t *testing.T) {
+	err := lint.Validate("/home/akachurin/GolandProjects/terraform-provider-opentelekomcloud")
+	require.NoError(t, err)
 }
