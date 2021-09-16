@@ -89,6 +89,10 @@ func (g Generator) getStructMethodTypes(funcName, receiverName, pkgName string) 
 }
 
 func (g Generator) getCachedScope(depName string, pkg *packages.Package) (*core.Scope, error) {
+	if depName == pkg.ID {
+		return g.packageScope(pkg)
+	}
+
 	scope, ok := g.scopeCache[depName]
 	if !ok {
 		depPkg := pkg.Imports[depName]
@@ -135,26 +139,12 @@ func (g Generator) absoluteImport(pkgName string, expr ast.Expr, pkg *packages.P
 }
 
 func (g Generator) packageScope(pkg *packages.Package) (s *core.Scope, err error) {
+	// we should be very accurate here, going too deep can lead to infinite recursion
 	objects := map[string]*ast.Object{}
 	fnDeclarations := map[string]*ast.FuncDecl{}
 	fnTypes := map[string]*core.FuncType{}
 	structDeclarations := map[string]*ast.GenDecl{}
 	for _, fl := range pkg.Syntax {
-		for k, v := range fl.Scope.Objects {
-			objects[k] = v
-			if fnDec, ok := v.Decl.(*ast.FuncDecl); ok {
-				types, err := g.getFunctionTypes(fnDec, pkg)
-				if err != nil {
-					log.Printf("error creating Generator: %s", err)
-				}
-				recv, err := g.getFuncReceiverName(fnDec, pkg)
-				if err != nil {
-					return nil, err
-				}
-				key := core.MethodName(recv, v.Name)
-				fnTypes[key] = types
-			}
-		}
 		for _, d := range fl.Decls {
 			switch dd := d.(type) {
 			case *ast.FuncDecl:
@@ -168,6 +158,22 @@ func (g Generator) packageScope(pkg *packages.Package) (s *core.Scope, err error
 				if dd.Tok == token.TYPE {
 					structDeclarations[dd.Specs[0].(*ast.TypeSpec).Name.Name] = dd
 				}
+			}
+		}
+		// FIXME solve recursion problems
+		for k, v := range fl.Scope.Objects {
+			objects[k] = v
+			if fnDec, ok := v.Decl.(*ast.FuncDecl); ok {
+				types, err := g.getFunctionTypes(fnDec, pkg)
+				if err != nil {
+					log.Printf("error creating Generator: %s", err)
+				}
+				recv, err := g.getFuncReceiverName(fnDec, pkg)
+				if err != nil {
+					return nil, err
+				}
+				key := core.MethodName(recv, v.Name)
+				fnTypes[key] = types
 			}
 		}
 	}
@@ -196,8 +202,8 @@ func (g Generator) importScope(expr *ast.SelectorExpr, pkg *packages.Package) (*
 	return scope, nil
 }
 
-func randomName() string {
-	val := fmt.Sprintf("internalType%08d", rand.Intn(0xffffff))
+func randomName(prefix string) string {
+	val := fmt.Sprintf("%s%08d", prefix, rand.Intn(0xffffff))
 	return val
 }
 
@@ -250,17 +256,21 @@ func (g Generator) getExpType(r ast.Expr, pkg *packages.Package) (core.Type, err
 			}
 			results = append(results, resT)
 		}
-		return &core.FuncType{
+		key := core.MethodName(pkg.ID, randomName("func"))
+		fnType := &core.FuncType{
+			Name:    key,
 			Args:    args,
 			Results: results,
 			Ref: &core.FunctionReference{
 				Package: pkg,
 			},
-		}, nil
+		}
+		g.fnScope[key] = fnType
+		return fnType, nil
 	case *ast.IndexExpr:
 		return g.getIndexExprType(exp, pkg)
 	case *ast.StructType: // locally defined types...
-		key := core.MethodName(pkg.ID, randomName())
+		key := core.MethodName(pkg.ID, randomName("struct"))
 		strct, err := g.fieldsToMap(exp.Fields, pkg)
 		if err != nil {
 			return nil, err
@@ -298,6 +308,7 @@ func (g Generator) getUnaryExprType(u *ast.UnaryExpr, pkg *packages.Package) (co
 
 func (g Generator) getFunctionTypes(decl *ast.FuncDecl, pkg *packages.Package) (*core.FuncType, error) {
 	ft := &core.FuncType{
+		Name: decl.Name.Name,
 		Ref: &core.FunctionReference{
 			Package: pkg,
 			Decl:    decl,
@@ -326,6 +337,7 @@ func (g Generator) getCallTypes(call *ast.CallExpr, pkg *packages.Package) (*cor
 				return nil, fmt.Errorf("error getting types from make: %w", err)
 			}
 			return &core.FuncType{
+				Name:    "make",
 				Results: []core.Type{typ},
 			}, nil
 		}
@@ -384,6 +396,49 @@ func (g Generator) getCallTypes(call *ast.CallExpr, pkg *packages.Package) (*cor
 var builtIns = set.StringSetFromSlice([]string{"error", "string", "int", "bool", "float"})
 var floats = set.StringSetFromSlice([]string{"float", "float64"})
 var ints = set.StringSetFromSlice([]string{"int", "int64"})
+
+func (g Generator) getTypeNameOnly(exp ast.Expr) (string, error) {
+	// finding name is a shallow operation in most cases, not going deep inside
+	switch e := exp.(type) {
+	case *ast.Ident:
+		return e.Name, nil
+	case *ast.SelectorExpr:
+		xName, err := g.getTypeNameOnly(e.X)
+		if err != nil {
+			return "", nil
+		}
+		return core.MethodName(xName, e.Sel.Name), nil
+	}
+	return "", fmt.Errorf("getting name is not supported for %v", exp)
+}
+
+func (g Generator) getTypeSpec(spec *ast.TypeSpec, pkg *packages.Package) (core.Type, error) {
+	name := spec.Name.Name
+	if pkg.ID != g.Pkg.ID {
+		name = core.MethodName(pkg.ID, name)
+	}
+	// first, maybe it's already cached?
+	if fMap, ok := g.structCache[name]; ok {
+		return &core.StructType{Name: name, Fields: fMap}, nil
+	}
+	// second, just get parent name
+	baseTypeName, err := g.getTypeNameOnly(spec.Type)
+	if err != nil { // if there is no parent name
+		// maybe this is just a struct definition?
+		tt, ok := spec.Type.(*ast.StructType)
+		if !ok {
+			return nil, fmt.Errorf("error getting wrapped type: %w", err)
+		}
+		fMap, err := g.fieldsToMap(tt.Fields, pkg)
+		if err != nil {
+			return nil, err
+		}
+		g.structCache[name] = fMap // dirty trick to avoid duplications
+		return &core.StructType{Name: name, Fields: fMap}, nil
+	}
+	// if it's ok, just remember to resolve it later
+	return &core.WrapperType{Name: name, Wrapped: baseTypeName}, nil
+}
 
 func (g Generator) getIdentType(ident *ast.Ident, pkg *packages.Package) (core.Type, error) {
 	if pkg == nil {
@@ -444,11 +499,7 @@ func (g Generator) getIdentType(ident *ast.Ident, pkg *packages.Package) (core.T
 		}
 		return typ, nil
 	case *ast.TypeSpec:
-		name := d.Name.Name
-		if pkg.ID != g.Pkg.ID {
-			name = core.MethodName(pkg.ID, name)
-		}
-		return &core.SimpleType{Value: name}, nil
+		return g.getTypeSpec(d, pkg)
 	case *ast.Field:
 		fieldType, err := g.getFieldType(d, pkg)
 		if err != nil {
@@ -519,14 +570,6 @@ func (g Generator) fieldsToMap(lst *ast.FieldList, pkg *packages.Package) (Struc
 	return fields, nil
 }
 
-func (g Generator) getStructFieldTypes(decl *ast.TypeSpec, pkg *packages.Package) (StructFields, error) {
-	strct, ok := decl.Type.(*ast.StructType)
-	if !ok {
-		return nil, fmt.Errorf("this is not struct: %v", decl)
-	}
-	return g.fieldsToMap(strct.Fields, pkg)
-}
-
 var elRe = regexp.MustCompile(`(.+)\.(\w+?)$`)
 
 func getPkgAndMember(typeName string) (string, string, error) {
@@ -563,11 +606,12 @@ func (g Generator) getStructTypes(typ core.Type, pkg *packages.Package) (StructF
 	if !ok {
 		return nil, fmt.Errorf("no struct with name %s is found", structName)
 	}
-	fields, err := g.getStructFieldTypes(structDecl.Specs[0].(*ast.TypeSpec), scope.Package)
-	if err != nil {
-		return nil, fmt.Errorf("can't list fields of the structure: %w", err)
+	typeSpec := structDecl.Specs[0].(*ast.TypeSpec)
+	strct, ok := typeSpec.Type.(*ast.StructType)
+	if !ok {
+		return nil, fmt.Errorf("this is not struct: %v", typeSpec)
 	}
-	return fields, nil
+	return g.fieldsToMap(strct.Fields, pkg)
 }
 
 func (g Generator) getSelectorType(sel *ast.SelectorExpr, pkg *packages.Package) (core.Type, error) {

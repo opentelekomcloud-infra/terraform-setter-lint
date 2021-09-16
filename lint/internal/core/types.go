@@ -29,6 +29,24 @@ func (s *SimpleType) BindToPackage(pkg string) {
 	s.Value = MethodName(pkg, s.String())
 }
 
+// WrapperType is a type using other type
+type WrapperType struct {
+	Name    string
+	Wrapped string
+}
+
+func (w *WrapperType) String() string {
+	return w.Name
+}
+
+func (w *WrapperType) Matches(string) bool {
+	panic("wrapper should not be matched against the type")
+}
+
+func (w *WrapperType) BindToPackage(pkg string) {
+	w.Name = MethodName(pkg, w.Name)
+}
+
 type ArrayType struct {
 	ItemType Type
 }
