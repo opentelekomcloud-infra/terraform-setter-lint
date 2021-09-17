@@ -119,7 +119,7 @@ func TestValidateAcceptance(t *testing.T) {
 }
 func TestValidateAcceptance2(t *testing.T) {
 	providerPath := "../../terraform-provider-opentelekomcloud"
-	if err := os.Chdir(providerPath); os.IsNotExist(err) {
+	if _, err := os.Open(providerPath); os.IsNotExist(err) {
 		t.Skipf("no provider found in %s", providerPath)
 	}
 	err := lint.Validate(providerPath)

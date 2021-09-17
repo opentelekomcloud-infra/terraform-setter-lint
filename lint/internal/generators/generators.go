@@ -50,26 +50,6 @@ func NewGenerator(name string, fset *token.FileSet, pkg *packages.Package, share
 	return gen, nil
 }
 
-func (g Generator) functionScope(baseScope map[string]*ast.Object, pkg *packages.Package) map[string]*core.FuncType {
-	res := make(map[string]*core.FuncType)
-	for _, obj := range baseScope {
-		if fnDec, ok := obj.Decl.(*ast.FuncDecl); ok {
-			types, err := g.getFunctionTypes(fnDec, pkg)
-			if err != nil {
-				log.Printf("error creating Generator: %s", err)
-			}
-
-			recType, err := g.getFuncReceiverName(fnDec)
-			if err != nil {
-				continue
-			}
-			key := core.MethodName(recType, fnDec.Name.Name)
-			res[key] = types
-		}
-	}
-	return res
-}
-
 func getDName(fn *ast.FuncDecl) string {
 	params := fn.Type.Params
 	var dataFld *ast.Field
@@ -174,7 +154,7 @@ func (g Generator) ValidateSetters() error {
 				if typ == nil {
 					return false
 				}
-				if !typ.Matches(expected) {
+				if !typ.Matches(expected) && !g.extendedMatch(typ, expected) {
 					mErr = multierror.Append(mErr, fmt.Errorf(
 						"%s - field `%s` has invalid type `%s`, expected `%s`",
 						pos.String(), key, typ.String(), expected,
@@ -186,4 +166,23 @@ func (g Generator) ValidateSetters() error {
 		})
 	}
 	return mErr.ErrorOrNil()
+}
+
+func (g Generator) extendedMatch(typ core.Type, expected string) bool {
+	base := typ.Matches(expected)
+	pkgID := typ.Package()
+	if pkgID == "" {
+		return base
+	}
+	scope, ok := g.scopeCache[pkgID]
+	if !ok {
+		log.Printf("no cached package with ID %s", pkgID)
+		return base
+	}
+	internalType, err := g.resolveLocalType(typ.Name(), scope.Package)
+	if err != nil {
+		log.Printf("error resolving local type")
+		return base
+	}
+	return internalType.Matches(expected)
 }
