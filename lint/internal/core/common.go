@@ -23,6 +23,7 @@ type Scope struct {
 	FuncDecls   map[string]*ast.FuncDecl
 	FuncTypes   map[string]*FuncType
 	StructDecls map[string]*ast.GenDecl
+	StructTypes map[string]*StructType
 }
 
 func MethodName(receiver, fnc string) string {

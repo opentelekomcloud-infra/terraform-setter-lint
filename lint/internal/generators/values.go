@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
-	"log"
 	"math/rand"
 	"regexp"
 	"strings"
@@ -50,59 +49,68 @@ func discoverParents(base *ast.GenDecl) []string {
 	return res
 }
 
-func (g Generator) getStructMethodTypes(funcName, receiverName, pkgName string) (*core.FuncType, error) {
-	depID, structName, err := getPkgAndMember(receiverName)
+func (g Generator) getCachedFunctionType(methodName string, scope *core.Scope) (*core.FuncType, error) {
+	decl, ok := scope.FuncDecls[methodName]
+	if !ok {
+		return nil, fmt.Errorf("can't find function declaration %s", methodName)
+	}
+	funcType, ok := scope.FuncTypes[methodName]
+	if ok {
+		return funcType, nil
+	}
+	funcType, err := g.getFunctionTypes(decl, scope.Package) // load types from declaration
 	if err != nil {
-		depID = pkgName
+		return nil, fmt.Errorf("error resolving types of %s.%s", scope.Package.ID, methodName)
+	}
+	scope.FuncTypes[methodName] = funcType
+	return funcType, nil
+}
+
+func (g Generator) getStructMethodTypes(funcName, receiverName string, pkg *packages.Package) (*core.FuncType, error) {
+	depID, structName, err := getPkgAndMember(receiverName)
+	if err == nil {
+		pkg, err = importByName(pkg, depID)
+		if err != nil {
+			return nil, err
+		}
+	} else {
 		structName = receiverName
 	}
-	receiverName = structName
-	pkgScope, err := g.getCachedScope(depID, g.Pkg)
+	scope, err := g.getCachedScope(pkg)
 	if err != nil {
 		return nil, err
 	}
 	// get struct and its parents
-	child, ok := pkgScope.StructDecls[structName]
+	child, ok := scope.StructDecls[structName]
 	if !ok {
 		return nil, fmt.Errorf("can't find struct with name %s", receiverName)
 	}
 	possibleReceivers := append([]string{receiverName}, discoverParents(child)...)
 
+	var typ *core.FuncType
 	for _, rec := range possibleReceivers {
-		fullName := core.MethodName(rec, funcName)
-		decl, ok := pkgScope.FuncDecls[fullName]
-		if !ok {
+		methodName := core.MethodName(rec, funcName)
+		typ, err = g.getCachedFunctionType(methodName, scope)
+		if err != nil {
 			continue
 		}
-		funcType, ok := pkgScope.FuncTypes[fullName]
-		if !ok { // bound methods are not listed here by default
-			var err error
-			funcType, err = g.getFunctionTypes(decl, pkgScope.Package) // load types from declaration
-			if err != nil || funcType == nil {
-				return nil, fmt.Errorf("error resolving types of %s", fullName)
-			}
-			pkgScope.FuncTypes[fullName] = funcType
-		}
-		return funcType, nil
 	}
-	return nil, fmt.Errorf("can't find types for method %s", core.MethodName(receiverName, funcName))
+	if typ == nil {
+		return nil, fmt.Errorf("can't find types for method %s", core.MethodName(structName, funcName))
+	}
+	return typ, nil
 }
 
-func (g Generator) getCachedScope(depName string, pkg *packages.Package) (*core.Scope, error) {
-	if depName == pkg.ID {
-		return g.packageScope(pkg)
+func (g Generator) getCachedScope(pkg *packages.Package) (*core.Scope, error) {
+	scope, ok := g.scopeCache[pkg.ID]
+	if ok {
+		return scope, nil
 	}
-
-	scope, ok := g.scopeCache[depName]
-	if !ok {
-		depPkg := pkg.Imports[depName]
-		var err error
-		scope, err = g.packageScope(depPkg)
-		if err != nil {
-			return nil, fmt.Errorf("error getting package scope: %w", err)
-		}
-		g.scopeCache[depName] = scope
+	scope, err := g.packageScope(pkg)
+	if err != nil {
+		return nil, fmt.Errorf("error getting package scope: %w", err)
 	}
+	g.scopeCache[pkg.ID] = scope
 	return scope, nil
 }
 
@@ -114,6 +122,9 @@ func getPkgName(pkg *packages.Package) string {
 }
 
 func (g Generator) absoluteImport(pkgName string, expr ast.Expr, pkg *packages.Package) string {
+	if pkgName == pkg.ID {
+		return pkg.ID
+	}
 	srcFile := g.FSet.File(expr.Pos())
 	for _, fl := range pkg.Syntax {
 		flPos := g.FSet.File(fl.Package)
@@ -142,13 +153,12 @@ func (g Generator) packageScope(pkg *packages.Package) (s *core.Scope, err error
 	// we should be very accurate here, going too deep can lead to infinite recursion
 	objects := map[string]*ast.Object{}
 	fnDeclarations := map[string]*ast.FuncDecl{}
-	fnTypes := map[string]*core.FuncType{}
 	structDeclarations := map[string]*ast.GenDecl{}
 	for _, fl := range pkg.Syntax {
 		for _, d := range fl.Decls {
 			switch dd := d.(type) {
 			case *ast.FuncDecl:
-				recv, err := g.getFuncReceiverName(dd, pkg)
+				recv, err := g.getFuncReceiverName(dd)
 				if err != nil {
 					return nil, err
 				}
@@ -163,26 +173,15 @@ func (g Generator) packageScope(pkg *packages.Package) (s *core.Scope, err error
 		// FIXME solve recursion problems
 		for k, v := range fl.Scope.Objects {
 			objects[k] = v
-			if fnDec, ok := v.Decl.(*ast.FuncDecl); ok {
-				types, err := g.getFunctionTypes(fnDec, pkg)
-				if err != nil {
-					log.Printf("error creating Generator: %s", err)
-				}
-				recv, err := g.getFuncReceiverName(fnDec, pkg)
-				if err != nil {
-					return nil, err
-				}
-				key := core.MethodName(recv, v.Name)
-				fnTypes[key] = types
-			}
 		}
 	}
 	return &core.Scope{
 		Package:     pkg,
 		Objects:     objects,
 		FuncDecls:   fnDeclarations,
-		FuncTypes:   fnTypes,
+		FuncTypes:   map[string]*core.FuncType{},
 		StructDecls: structDeclarations,
+		StructTypes: map[string]*core.StructType{},
 	}, nil
 }
 
@@ -208,6 +207,11 @@ func randomName(prefix string) string {
 }
 
 func (g Generator) getExpType(r ast.Expr, pkg *packages.Package) (core.Type, error) {
+	pScope, err := g.getCachedScope(pkg)
+	if err != nil {
+		return nil, fmt.Errorf("error getting package scope for %s: %w", pkg.ID, err)
+	}
+
 	switch exp := r.(type) {
 	case *ast.ArrayType:
 		elemType, err := g.getExpType(exp.Elt, pkg)
@@ -238,7 +242,19 @@ func (g Generator) getExpType(r ast.Expr, pkg *packages.Package) (core.Type, err
 	case *ast.InterfaceType:
 		return &core.SimpleType{Value: "interface"}, nil
 	case *ast.CallExpr:
-		return nil, fmt.Errorf("we can't parse calls now")
+		// we need only one call result
+		typ, err := g.getExpType(exp.Fun, pkg)
+		if err != nil {
+			return nil, fmt.Errorf("error fiding called function: %w", err)
+		}
+		switch t := typ.(type) {
+		case *core.FuncType:
+			return t.Results[0], err
+		case *core.WrapperType, *core.SimpleType:
+			return t, err
+		default:
+			return nil, fmt.Errorf("can't use non-callable type in call")
+		}
 	case *ast.FuncType:
 		var args []core.Type
 		var results []core.Type
@@ -256,7 +272,7 @@ func (g Generator) getExpType(r ast.Expr, pkg *packages.Package) (core.Type, err
 			}
 			results = append(results, resT)
 		}
-		key := core.MethodName(pkg.ID, randomName("func"))
+		key := randomName("func")
 		fnType := &core.FuncType{
 			Name:    key,
 			Args:    args,
@@ -265,18 +281,23 @@ func (g Generator) getExpType(r ast.Expr, pkg *packages.Package) (core.Type, err
 				Package: pkg,
 			},
 		}
-		g.fnScope[key] = fnType
+		pScope, err := g.getCachedScope(pkg)
+		if err != nil {
+			return nil, fmt.Errorf("error getting package scope for %s: %w", pkg.ID, err)
+		}
+		pScope.FuncTypes[key] = fnType
 		return fnType, nil
 	case *ast.IndexExpr:
 		return g.getIndexExprType(exp, pkg)
-	case *ast.StructType: // locally defined types...
-		key := core.MethodName(pkg.ID, randomName("struct"))
+	case *ast.StructType: // locally defined types
+		key := randomName("struct")
 		strct, err := g.fieldsToMap(exp.Fields, pkg)
 		if err != nil {
 			return nil, err
 		}
-		g.structCache[key] = strct
-		return &core.StructType{Name: key, Fields: strct}, nil
+		sType := &core.StructType{Name: key, Fields: strct}
+		pScope.StructTypes[key] = sType
+		return sType, nil
 	case *ast.TypeAssertExpr:
 		return g.getExpType(exp.Type, pkg)
 	case *ast.BasicLit:
@@ -328,6 +349,11 @@ func (g Generator) getFunctionTypes(decl *ast.FuncDecl, pkg *packages.Package) (
 }
 
 func (g Generator) getCallTypes(call *ast.CallExpr, pkg *packages.Package) (*core.FuncType, error) {
+	pScope, err := g.getCachedScope(pkg)
+	if err != nil {
+		return nil, fmt.Errorf("error getting package scope for %s: %w", pkg.ID, err)
+	}
+
 	switch fn := call.Fun.(type) {
 	case *ast.Ident:
 		if fn.Name == "make" {
@@ -341,13 +367,9 @@ func (g Generator) getCallTypes(call *ast.CallExpr, pkg *packages.Package) (*cor
 				Results: []core.Type{typ},
 			}, nil
 		}
-		types, ok := g.fnScope[fn.Name]
-		if !ok {
-			return nil, fmt.Errorf("no function %s is defined", fn.Name)
-		}
-		return types, nil
+		return g.getCachedFunctionType(fn.Name, pScope)
 	case *ast.SelectorExpr:
-		var depID string
+		var dep *packages.Package
 		var memberName string
 		switch x := fn.X.(type) {
 		case *ast.CallExpr:
@@ -355,8 +377,11 @@ func (g Generator) getCallTypes(call *ast.CallExpr, pkg *packages.Package) (*cor
 			if err != nil {
 				return nil, fmt.Errorf("error getting recursive func types: %w", err)
 			}
-			depID = xType.Ref.Package.ID
-			memberName = core.LocalName(xType.Results[0], xType.Ref.Package)
+			dep, err = importByName(pkg, xType.Ref.Package.ID)
+			if err != nil {
+				return nil, err
+			}
+			memberName = core.LocalName(xType.Results[0], dep)
 		default:
 			xType, err := g.getSelectorType(fn, pkg)
 			if err != nil {
@@ -370,25 +395,24 @@ func (g Generator) getCallTypes(call *ast.CallExpr, pkg *packages.Package) (*cor
 			if err != nil {
 				return nil, err
 			}
-			depID = pkgID
+			dep, err = importByName(pkg, pkgID)
+			if err != nil {
+				return nil, err
+			}
 			memberName = structName
 		}
-		scope, err := g.getCachedScope(depID, pkg)
+		scope, err := g.getCachedScope(dep)
 		if err != nil {
 			return nil, err
 		}
 		if i, ok := fn.X.(*ast.Ident); ok && i.Obj == nil {
-			typ, ok := scope.FuncTypes[memberName]
-			if !ok {
-				return nil, fmt.Errorf("function %s not found in package %s", memberName, depID)
-			}
-			return typ, nil
+			return g.getCachedFunctionType(memberName, scope)
 		}
 		structType, ok := scope.Objects[memberName]
 		if !ok {
-			return nil, fmt.Errorf("struct %s is not found in package %s", memberName, depID)
+			return nil, fmt.Errorf("struct %s is not found in package %s", memberName, dep.ID)
 		}
-		return g.getStructMethodTypes(fn.Sel.Name, structType.Name, depID)
+		return g.getStructMethodTypes(fn.Sel.Name, structType.Name, dep)
 	}
 	return nil, fmt.Errorf("can't get function declaration for call %v", call)
 }
@@ -408,18 +432,25 @@ func (g Generator) getTypeNameOnly(exp ast.Expr) (string, error) {
 			return "", nil
 		}
 		return core.MethodName(xName, e.Sel.Name), nil
+	case *ast.StarExpr:
+		return g.getTypeNameOnly(e.X)
 	}
 	return "", fmt.Errorf("getting name is not supported for %v", exp)
 }
 
 func (g Generator) getTypeSpec(spec *ast.TypeSpec, pkg *packages.Package) (core.Type, error) {
+	pScope, err := g.getCachedScope(pkg)
+	if err != nil {
+		return nil, fmt.Errorf("error getting package scope for %s: %w", pkg.ID, err)
+	}
+
 	name := spec.Name.Name
 	if pkg.ID != g.Pkg.ID {
 		name = core.MethodName(pkg.ID, name)
 	}
 	// first, maybe it's already cached?
-	if fMap, ok := g.structCache[name]; ok {
-		return &core.StructType{Name: name, Fields: fMap}, nil
+	if structType, ok := pScope.StructTypes[name]; ok {
+		return structType, nil
 	}
 	// second, just get parent name
 	baseTypeName, err := g.getTypeNameOnly(spec.Type)
@@ -433,8 +464,9 @@ func (g Generator) getTypeSpec(spec *ast.TypeSpec, pkg *packages.Package) (core.
 		if err != nil {
 			return nil, err
 		}
-		g.structCache[name] = fMap // dirty trick to avoid duplications
-		return &core.StructType{Name: name, Fields: fMap}, nil
+		sType := &core.StructType{Name: name, Fields: fMap}
+		pScope.StructTypes[name] = sType // dirty trick to avoid duplications
+		return sType, nil
 	}
 	// if it's ok, just remember to resolve it later
 	return &core.WrapperType{Name: name, Wrapped: baseTypeName}, nil
@@ -580,6 +612,17 @@ func getPkgAndMember(typeName string) (string, string, error) {
 	return parts[1], parts[2], nil
 }
 
+func importByName(pkg *packages.Package, name string) (*packages.Package, error) {
+	if pkg.ID == name {
+		return pkg, nil
+	}
+	imp, ok := pkg.Imports[name]
+	if !ok {
+		return nil, fmt.Errorf("can't find import for %s in %s package", name, pkg)
+	}
+	return imp, nil
+}
+
 func (g Generator) getStructTypes(typ core.Type, pkg *packages.Package) (StructFields, error) {
 	// get field type
 	var fullName string
@@ -589,17 +632,17 @@ func (g Generator) getStructTypes(typ core.Type, pkg *packages.Package) (StructF
 	default:
 		fullName = t.String()
 	}
-	pkgName, structName, err := getPkgAndMember(fullName)
-	if err != nil {
-		pkgName = pkg.ID
-		structName = fullName
+	impName, structName, err := getPkgAndMember(fullName)
+	if err == nil {
+		imp, ok := pkg.Imports[impName]
+		if !ok {
+			return nil, fmt.Errorf("error finding import %s in %s package", impName, pkg.ID)
+		}
+		pkg = imp
 	}
-	scope, err := g.getCachedScope(pkgName, pkg)
+	scope, err := g.getCachedScope(pkg)
 	if err != nil {
-		return nil, err
-	}
-	if scope == nil {
-		return nil, fmt.Errorf("can't find import %s in package %s", pkgName, pkg.ID)
+		return nil, fmt.Errorf("error getting scope: %w", err)
 	}
 
 	structDecl, ok := scope.StructDecls[structName]
@@ -618,7 +661,10 @@ func (g Generator) getSelectorType(sel *ast.SelectorExpr, pkg *packages.Package)
 	// this is import
 	if ix, ok := sel.X.(*ast.Ident); ok && ix.Obj == nil {
 		pkgAbs := g.absoluteImport(ix.Name, sel, pkg)
-		innerPkg := pkg.Imports[pkgAbs]
+		innerPkg, err := importByName(pkg, pkgAbs)
+		if err != nil {
+			return nil, err
+		}
 		resType, err := g.getExpType(sel.Sel, innerPkg)
 		if err != nil {
 			return nil, err
@@ -639,18 +685,34 @@ func (g Generator) getSelectorType(sel *ast.SelectorExpr, pkg *packages.Package)
 	}
 
 	typeName := xType.String()
-	fields, ok := g.structCache[typeName]
+	pkgName, localName, err := getPkgAndMember(typeName)
+	var pScope *core.Scope
+	if err != nil {
+		pkgName = pkg.ID
+		localName = typeName
+	}
+	targetPkg, err := importByName(pkg, pkgName)
+	if err != nil {
+		return nil, err
+	}
+	pScope, err = g.getCachedScope(targetPkg)
+	if err != nil {
+		return nil, fmt.Errorf("error getting package scope for %s: %w", pkg.ID, err)
+	}
+
+	sType, ok := pScope.StructTypes[localName]
 	if !ok {
-		fields, err = g.getStructTypes(xType, pkg)
+		fields, err := g.getStructTypes(xType, pkg)
 		if err != nil {
 			return nil, err
 		}
-		g.structCache[typeName] = fields
+		sType = &core.StructType{Name: typeName, Fields: fields}
+		pScope.StructTypes[localName] = sType
 	}
 
-	typ, ok := fields[sel.Sel.Name]
+	typ, ok := sType.Fields[sel.Sel.Name]
 	if !ok {
-		typ, err = g.getStructMethodTypes(sel.Sel.Name, typeName, pkg.ID)
+		typ, err = g.getStructMethodTypes(sel.Sel.Name, localName, targetPkg)
 		if err != nil {
 			return nil, err
 		}
@@ -666,16 +728,16 @@ func (g Generator) getTypeAssertionType(asrt *ast.TypeAssertExpr, pkg *packages.
 	return typ, nil
 }
 
-func (g Generator) getFuncReceiverName(fDecl *ast.FuncDecl, pkg *packages.Package) (string, error) {
+func (g Generator) getFuncReceiverName(fDecl *ast.FuncDecl) (string, error) {
 	if fDecl.Recv.NumFields() == 0 {
 		return "", nil
 	}
 	if f := fDecl.Recv.List[0]; f != nil {
-		recvType, err := g.getExpType(f.Type, pkg)
+		recvType, err := g.getTypeNameOnly(f.Type)
 		if err != nil {
 			return "", err
 		}
-		return core.LocalName(recvType, pkg), err
+		return recvType, err
 	}
 	return "", nil
 }

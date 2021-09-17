@@ -17,7 +17,6 @@ func Validate(path string) error {
 	cfg := &packages.Config{
 		Mode: packages.NeedDeps |
 			packages.NeedImports |
-			packages.NeedExportsFile |
 			packages.NeedSyntax,
 		Fset: fSet,
 		Dir:  path,

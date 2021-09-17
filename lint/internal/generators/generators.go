@@ -18,7 +18,6 @@ type Field struct {
 	Type string
 }
 
-type FuncScope map[string]*core.FuncType // cache of typed functions
 type StructFields map[string]core.Type
 
 // Generator is representation of a single generator function
@@ -27,22 +26,18 @@ type Generator struct {
 	Pkg          *packages.Package
 	Name         string
 	Schema       map[string]Field
-	fnScope      FuncScope
 	OperatingFns []*ast.FuncDecl
 
-	structCache map[string]StructFields
-	scopeCache  map[string]*core.Scope // scopes of any imported library, populated lazily
+	scopeCache map[string]*core.Scope // scopes of any imported library, populated lazily
 }
 
 func NewGenerator(name string, fset *token.FileSet, pkg *packages.Package, sharedScopes map[string]*core.Scope) (*Generator, error) {
 	gen := &Generator{
-		FSet:        fset,
-		Pkg:         pkg,
-		Name:        name,
-		scopeCache:  sharedScopes,
-		structCache: map[string]StructFields{},
+		FSet:       fset,
+		Pkg:        pkg,
+		Name:       name,
+		scopeCache: sharedScopes,
 	}
-
 	pkgScope, ok := sharedScopes[pkg.ID] // should be populated in parser
 	if !ok {
 		var err error
@@ -52,12 +47,11 @@ func NewGenerator(name string, fset *token.FileSet, pkg *packages.Package, share
 		}
 		sharedScopes[pkg.ID] = pkgScope
 	}
-	gen.fnScope = gen.functionScope(pkgScope.Objects, pkg)
 	return gen, nil
 }
 
-func (g Generator) functionScope(baseScope map[string]*ast.Object, pkg *packages.Package) FuncScope {
-	res := make(FuncScope)
+func (g Generator) functionScope(baseScope map[string]*ast.Object, pkg *packages.Package) map[string]*core.FuncType {
+	res := make(map[string]*core.FuncType)
 	for _, obj := range baseScope {
 		if fnDec, ok := obj.Decl.(*ast.FuncDecl); ok {
 			types, err := g.getFunctionTypes(fnDec, pkg)
@@ -65,9 +59,8 @@ func (g Generator) functionScope(baseScope map[string]*ast.Object, pkg *packages
 				log.Printf("error creating Generator: %s", err)
 			}
 
-			recType, err := g.getFuncReceiverName(fnDec, pkg)
+			recType, err := g.getFuncReceiverName(fnDec)
 			if err != nil {
-				log.Println("error getting receiver name: %s", err)
 				continue
 			}
 			key := core.MethodName(recType, fnDec.Name.Name)
