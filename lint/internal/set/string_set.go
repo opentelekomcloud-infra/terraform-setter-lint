@@ -15,7 +15,7 @@ func (s *StringSet) Push(v ...string) {
 }
 
 func (s *StringSet) Items() (res []string) {
-	for v, _ := range s.hash {
+	for v := range s.hash {
 		res = append(res, v)
 	}
 	return

@@ -53,9 +53,6 @@ func (s *SimpleType) Matches(expected string) bool {
 }
 
 func (s *SimpleType) Name() string {
-	if s == nil {
-		println("asf")
-	}
 	return s.Value
 }
 
@@ -111,9 +108,7 @@ func (m *MapType) Matches(expected string) bool {
 	return expected == "map"
 }
 
-func (m *MapType) BindToPackage(string) {
-	return // pkg is now always empty
-}
+func (m *MapType) BindToPackage(string) {}
 
 type StructType struct {
 	typeInPackage
@@ -173,9 +168,7 @@ func (s StubType) Matches(string) bool {
 	return false
 }
 
-func (s StubType) BindToPackage(string) {
-	return
-}
+func (s StubType) BindToPackage(string) {}
 
 type InterfaceType struct {
 	SimpleType

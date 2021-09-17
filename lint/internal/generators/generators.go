@@ -38,10 +38,10 @@ func NewGenerator(name string, fset *token.FileSet, pkg *packages.Package, share
 		Name:       name,
 		scopeCache: sharedScopes,
 	}
-	pkgScope, ok := sharedScopes[pkg.ID] // should be populated in parser
+	_, ok := sharedScopes[pkg.ID] // should be populated in parser
 	if !ok {
 		var err error
-		pkgScope, err = gen.packageScope(pkg)
+		pkgScope, err := gen.packageScope(pkg)
 		if err != nil {
 			return nil, err
 		}

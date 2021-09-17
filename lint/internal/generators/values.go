@@ -190,22 +190,6 @@ func (g Generator) packageScope(pkg *packages.Package) (s *core.Scope, err error
 	}, nil
 }
 
-func (g Generator) importScope(expr *ast.SelectorExpr, pkg *packages.Package) (*core.Scope, error) {
-	imps := pkg.Imports
-	pkgName := expr.X.(*ast.Ident).Name
-	fullImportName := g.absoluteImport(pkgName, expr, pkg)
-	scope, ok := g.scopeCache[fullImportName]
-	if !ok {
-		var err error
-		scope, err = g.packageScope(imps[fullImportName])
-		if err != nil {
-			return nil, fmt.Errorf("error importing package scope: %w", err)
-		}
-		g.scopeCache[fullImportName] = scope
-	}
-	return scope, nil
-}
-
 func randomName(prefix string) string {
 	val := fmt.Sprintf("%s%08d", prefix, rand.Intn(0xffffff))
 	return val
@@ -317,7 +301,6 @@ func (g Generator) getExpType(r ast.Expr, pkg *packages.Package) (core.Type, err
 		case token.EQL:
 			return &core.SimpleType{Value: "bool"}, nil
 		}
-		break
 	case *ast.CompositeLit:
 		return nil, nil
 	case *ast.ChanType:
@@ -605,7 +588,7 @@ func (g Generator) getIdentType(ident *ast.Ident, pkg *packages.Package) (core.T
 func (g Generator) getIndexExprType(ind *ast.IndexExpr, pkg *packages.Package) (core.Type, error) {
 	typ, err := g.getExpType(ind.X, pkg)
 	if err != nil {
-		err = fmt.Errorf("error getting index expression type: %w", err)
+		return nil, fmt.Errorf("error getting index expression type: %w", err)
 	}
 	switch tt := typ.(type) {
 	case *core.ArrayType:
@@ -775,14 +758,6 @@ func (g Generator) getSelectorType(sel *ast.SelectorExpr, pkg *packages.Package)
 		if err != nil {
 			return nil, err
 		}
-	}
-	return typ, nil
-}
-
-func (g Generator) getTypeAssertionType(asrt *ast.TypeAssertExpr, pkg *packages.Package) (core.Type, error) {
-	typ, err := g.getExpType(asrt.X, pkg)
-	if err != nil {
-		return nil, fmt.Errorf("can't resolve type assertion: %w", err)
 	}
 	return typ, nil
 }
