@@ -544,7 +544,6 @@ func (g Generator) getIdentType(ident *ast.Ident, pkg *packages.Package) (core.T
 		}
 		// check right side types
 		if len(d.Rhs) != 1 {
-			println("Not supported now")
 			return nil, fmt.Errorf("can't work with number or right side values != 1")
 		}
 		var typ core.Type
