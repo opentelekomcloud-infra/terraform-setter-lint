@@ -8,31 +8,34 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/opentelekomcloud-infra/terraform-setter-lint/lint/internal/core"
 	"github.com/opentelekomcloud-infra/terraform-setter-lint/lint/internal/generators"
 	"github.com/opentelekomcloud-infra/terraform-setter-lint/lint/internal/set"
-	"github.com/opentelekomcloud-infra/terraform-setter-lint/lint/internal/utils"
 	"golang.org/x/tools/go/packages"
 )
 
-type Parser struct {
+// PackageParser single package
+type PackageParser struct {
 	fSet *token.FileSet
 	pkg  *packages.Package
 	// map of file to import name
 	schemaImportNames map[token.Pos]string
+	scopeCache        map[string]*core.Scope
 }
 
 const schemaImportPath = "github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 
-func NewParser(pkg *packages.Package, set *token.FileSet) *Parser {
-	p := &Parser{
-		pkg:  pkg,
-		fSet: set,
+func NewParser(pkg *packages.Package, set *token.FileSet, scopeCache map[string]*core.Scope) *PackageParser {
+	p := &PackageParser{
+		pkg:        pkg,
+		fSet:       set,
+		scopeCache: scopeCache,
 	}
 	p.schemaImportNames = p.findImportNames(schemaImportPath)
 	return p
 }
 
-var usedFnNames = set.SetFromSlice([]string{
+var usedFnNames = set.StringSetFromSlice([]string{
 	"CreateContext",
 	"Create",
 	"ReadContext",
@@ -41,8 +44,11 @@ var usedFnNames = set.SetFromSlice([]string{
 	"Update",
 })
 
-func (p Parser) ParseGenerator(lit *ast.CompositeLit, genName string) (*generators.Generator, error) {
-	gen := &generators.Generator{FSet: p.fSet, Name: genName}
+func (p PackageParser) ParseGenerator(lit *ast.CompositeLit, genName string) (*generators.Generator, error) {
+	gen, err := generators.NewGenerator(genName, p.fSet, p.pkg, p.scopeCache)
+	if err != nil {
+		return nil, err
+	}
 	for _, el := range lit.Elts {
 		kv, ok := el.(*ast.KeyValueExpr)
 		if !ok {
@@ -85,7 +91,7 @@ func (p Parser) ParseGenerator(lit *ast.CompositeLit, genName string) (*generato
 	return gen, nil
 }
 
-func (p Parser) schemaDeclToMap(schemaDecl *ast.CompositeLit) (map[string]generators.Field, error) {
+func (p PackageParser) schemaDeclToMap(schemaDecl *ast.CompositeLit) (map[string]generators.Field, error) {
 	result := map[string]generators.Field{}
 	for i, el := range schemaDecl.Elts {
 		kv, ok := el.(*ast.KeyValueExpr)
@@ -125,35 +131,15 @@ func parseComposite(lit *ast.CompositeLit) (*generators.Field, error) {
 	return f, nil
 }
 
-func (p Parser) parseImportedFn(expr *ast.SelectorExpr) (*generators.Field, error) {
-	imps := p.pkg.Imports
-	pkgName := expr.X.(*ast.Ident).Name
-	fnName := expr.Sel.Name
-	for k, imp := range imps {
-		name := imp.Name
-		if name == "" {
-			name = filepath.Base(k) // hope this always works
-		}
-		if name != pkgName {
-			continue
-		}
-		for _, fl := range imp.Syntax {
-			fnDcl := fl.Scope.Lookup(fnName)
-			if fnDcl == nil {
-				continue
-			}
-			dcl, ok := fnDcl.Decl.(*ast.FuncDecl)
-			if !ok {
-				return nil, fmt.Errorf("invalid function declaration for %s", fnName)
-			}
-			return parseFnDeclaration(dcl)
-		}
-		break
+func (p PackageParser) parseImportedFn(expr *ast.SelectorExpr) (*generators.Field, error) {
+	dcl, err := core.ResolveImportedFunction(expr, p.pkg)
+	if err != nil {
+		return nil, err
 	}
-	return nil, nil
+	return parseFnDeclaration(dcl.Decl, dcl.Package)
 }
 
-func parseFnDeclaration(decl *ast.FuncDecl) (*generators.Field, error) {
+func parseFnDeclaration(decl *ast.FuncDecl, pkg *packages.Package) (*generators.Field, error) {
 	for _, stmt := range decl.Body.List {
 		ret, ok := stmt.(*ast.ReturnStmt)
 		if !ok {
@@ -191,11 +177,11 @@ func parseFnDeclaration(decl *ast.FuncDecl) (*generators.Field, error) {
 	return nil, nil
 }
 
-func (p Parser) parseCall(call *ast.CallExpr) (*generators.Field, error) {
+func (p PackageParser) parseCall(call *ast.CallExpr) (*generators.Field, error) {
 	switch fn := call.Fun.(type) {
 	case *ast.Ident:
 		// in package
-		return parseFnDeclaration(fn.Obj.Decl.(*ast.FuncDecl))
+		return parseFnDeclaration(fn.Obj.Decl.(*ast.FuncDecl), p.pkg)
 	case *ast.SelectorExpr:
 		// imported
 		return p.parseImportedFn(fn)
@@ -203,7 +189,7 @@ func (p Parser) parseCall(call *ast.CallExpr) (*generators.Field, error) {
 	return nil, nil
 }
 
-func (p Parser) parseSchemaField(expr ast.Expr) (*generators.Field, error) {
+func (p PackageParser) parseSchemaField(expr ast.Expr) (*generators.Field, error) {
 	switch v := expr.(type) {
 	case *ast.CompositeLit:
 		return parseComposite(v)
@@ -213,7 +199,7 @@ func (p Parser) parseSchemaField(expr ast.Expr) (*generators.Field, error) {
 	return nil, fmt.Errorf("invalid field %+v", expr)
 }
 
-func (p Parser) FindFnObject(name string) *ast.Object {
+func (p PackageParser) FindFnObject(name string) *ast.Object {
 	for _, fl := range p.pkg.Syntax {
 		for _, obj := range fl.Scope.Objects {
 			if obj.Name == name {
@@ -224,12 +210,12 @@ func (p Parser) FindFnObject(name string) *ast.Object {
 	return nil
 }
 
-func (p Parser) findImportNames(iPath string) map[token.Pos]string {
+func (p PackageParser) findImportNames(iPath string) map[token.Pos]string {
 	imports := make(map[token.Pos]string)
 	for _, fl := range p.pkg.Syntax {
 		pos := fl.Pos()
 		for _, imp := range fl.Imports {
-			val, _ := utils.UnwrapString(imp.Path)
+			val, _ := core.UnwrapString(imp.Path)
 			if val != iPath {
 				continue
 			}
@@ -243,7 +229,7 @@ func (p Parser) findImportNames(iPath string) map[token.Pos]string {
 	return imports
 }
 
-func (p Parser) GeneratorNames() (names []string) {
+func (p PackageParser) GeneratorNames() (names []string) {
 	files := p.pkg.Syntax
 	for _, f := range files {
 		for name, obj := range f.Scope.Objects {
@@ -257,7 +243,7 @@ func (p Parser) GeneratorNames() (names []string) {
 	return
 }
 
-func (p Parser) isGeneratorFn(obj *ast.Object, filePos token.Pos) bool {
+func (p PackageParser) isGeneratorFn(obj *ast.Object, filePos token.Pos) bool {
 	fn, ok := obj.Decl.(*ast.FuncDecl)
 	if !ok {
 		return false

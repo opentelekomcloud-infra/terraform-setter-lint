@@ -4,15 +4,30 @@ type StringSet struct {
 	hash map[string]struct{}
 }
 
+func (s *StringSet) Push(v ...string) {
+	if s.hash == nil {
+		s.hash = map[string]struct{}{}
+	}
+
+	for _, stV := range v {
+		s.hash[stV] = struct{}{}
+	}
+}
+
+func (s *StringSet) Items() (res []string) {
+	for v := range s.hash {
+		res = append(res, v)
+	}
+	return
+}
+
 func (s *StringSet) Contains(el string) bool {
 	_, ok := s.hash[el]
 	return ok
 }
 
-func SetFromSlice(slc []string) StringSet {
-	set := StringSet{hash: map[string]struct{}{}}
-	for _, v := range slc {
-		set.hash[v] = struct{}{}
-	}
+func StringSetFromSlice(slc []string) *StringSet {
+	set := &StringSet{}
+	set.Push(slc...)
 	return set
 }

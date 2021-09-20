@@ -6,6 +6,7 @@ import (
 	"log"
 
 	"github.com/hashicorp/go-multierror"
+	"github.com/opentelekomcloud-infra/terraform-setter-lint/lint/internal/core"
 	"github.com/opentelekomcloud-infra/terraform-setter-lint/lint/internal/parser"
 	"golang.org/x/tools/go/packages"
 )
@@ -25,15 +26,34 @@ func Validate(path string) error {
 	if err != nil {
 		return err
 	}
+	validr := validator{
+		pkgs:     pkgs,
+		fset:     fSet,
+		pkgCache: map[string]*core.Scope{},
+	}
+	return validr.validatePackages()
+}
+
+// validator is a global validation storage
+type validator struct {
+	// pkgs - list of checked packages
+	pkgs []*packages.Package
+	// fset - shared FilSet
+	fset *token.FileSet
+	// pkgCache - a map for imported package caching
+	pkgCache map[string]*core.Scope
+}
+
+func (v *validator) validatePackages() error {
 	var mErr *multierror.Error
-	for _, pkg := range pkgs {
-		mErr = multierror.Append(mErr, validatePackage(pkg, fSet))
+	for _, pkg := range v.pkgs {
+		mErr = multierror.Append(mErr, v.validatePackage(pkg))
 	}
 	return mErr.ErrorOrNil()
 }
 
-func validatePackage(pkg *packages.Package, fSet *token.FileSet) error {
-	p := parser.NewParser(pkg, fSet) // we need this state to use types and imports later
+func (v *validator) validatePackage(pkg *packages.Package) error {
+	p := parser.NewParser(pkg, v.fset, v.pkgCache) // we need this state to use types and imports later
 	fnNames := p.GeneratorNames()
 	if fnNames == nil {
 		return nil

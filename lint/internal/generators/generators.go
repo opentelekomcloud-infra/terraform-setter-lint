@@ -10,17 +10,44 @@ import (
 	"strings"
 
 	"github.com/hashicorp/go-multierror"
+	"github.com/opentelekomcloud-infra/terraform-setter-lint/lint/internal/core"
+	"golang.org/x/tools/go/packages"
 )
 
 type Field struct {
 	Type string
 }
 
+type StructFields map[string]core.Type
+
+// Generator is representation of a single generator function
 type Generator struct {
 	FSet         *token.FileSet
+	Pkg          *packages.Package
 	Name         string
 	Schema       map[string]Field
 	OperatingFns []*ast.FuncDecl
+
+	scopeCache map[string]*core.Scope // scopes of any imported library, populated lazily
+}
+
+func NewGenerator(name string, fset *token.FileSet, pkg *packages.Package, sharedScopes map[string]*core.Scope) (*Generator, error) {
+	gen := &Generator{
+		FSet:       fset,
+		Pkg:        pkg,
+		Name:       name,
+		scopeCache: sharedScopes,
+	}
+	_, ok := sharedScopes[pkg.ID] // should be populated in parser
+	if !ok {
+		var err error
+		pkgScope, err := gen.packageScope(pkg)
+		if err != nil {
+			return nil, err
+		}
+		sharedScopes[pkg.ID] = pkgScope
+	}
+	return gen, nil
 }
 
 func getDName(fn *ast.FuncDecl) string {
@@ -57,12 +84,7 @@ func isDSetSelector(expr ast.Expr, dName string) bool {
 	return true
 }
 
-type ValidationError struct {
-	pos    token.Position
-	field  string
-	reason error
-}
-
+// simplifyPath - simplify absolute path if possible
 func simplifyPath(src string) string {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -72,24 +94,18 @@ func simplifyPath(src string) string {
 	if err != nil {
 		return src
 	}
+	if len(src) < len(res) {
+		return src
+	}
 	return res
 }
 
-func (v ValidationError) Error() string {
-	position := v.pos
-	position.Filename = simplifyPath(position.Filename)
-	return fmt.Sprintf(
-		"%s - broken setter for field `%s`: %s",
-		position.String(), v.field, v.reason,
-	)
-}
-
-func (g Generator) validateKey(key string) error {
-	_, ok := g.Schema[key]
+func (g Generator) getKey(key string) (*Field, error) {
+	fld, ok := g.Schema[key]
 	if !ok {
-		return fmt.Errorf("field missing in the schema defined in `%s`", g.Name)
+		return nil, fmt.Errorf("field missing in the schema defined in `%s`", g.Name)
 	}
-	return nil
+	return &fld, nil
 }
 
 func (g Generator) ValidateSetters() error {
@@ -114,13 +130,35 @@ func (g Generator) ValidateSetters() error {
 					return false
 				}
 				key := strings.Trim(keyExpr.Value, `"`)
-				err := g.validateKey(key)
+
+				// position for error messages
+				pos := g.FSet.Position(call.Pos())
+				pos.Column = 0 // no need for such details
+				pos.Filename = simplifyPath(pos.Filename)
+
+				fld, err := g.getKey(key)
 				if err != nil {
-					mErr = multierror.Append(mErr, ValidationError{
-						pos:    g.FSet.Position(call.Pos()),
-						field:  key,
-						reason: err,
-					})
+					mErr = multierror.Append(mErr, fmt.Errorf(
+						"%s - broken setter for field `%s`: %w", pos.String(), key, err,
+					))
+					return false
+				}
+				typ, err := g.getExpType(call.Args[1], g.Pkg)
+				if err != nil {
+					mErr = multierror.Append(mErr, fmt.Errorf(
+						"%s - error getting `%s` value type: %w", pos.String(), key, err,
+					))
+					return false
+				}
+				expected := typeMapping[fld.Type]
+				if typ == nil {
+					return false
+				}
+				if !typ.Matches(expected) && !g.extendedMatch(typ, expected) {
+					mErr = multierror.Append(mErr, fmt.Errorf(
+						"%s - field `%s` has invalid type `%s`, expected `%s`",
+						pos.String(), key, typ.String(), expected,
+					))
 				}
 				return false
 			}
@@ -128,4 +166,23 @@ func (g Generator) ValidateSetters() error {
 		})
 	}
 	return mErr.ErrorOrNil()
+}
+
+func (g Generator) extendedMatch(typ core.Type, expected string) bool {
+	base := typ.Matches(expected)
+	pkgID := typ.Package()
+	if pkgID == "" {
+		return base
+	}
+	scope, ok := g.scopeCache[pkgID]
+	if !ok {
+		log.Printf("no cached package with ID %s", pkgID)
+		return base
+	}
+	internalType, err := g.resolveLocalType(typ.Name(), scope.Package)
+	if err != nil {
+		log.Printf("error resolving local type")
+		return base
+	}
+	return internalType.Matches(expected)
 }
