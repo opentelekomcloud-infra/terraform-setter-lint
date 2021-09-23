@@ -74,10 +74,6 @@ func (g Generator) schemaDeclToMap(schemaDecl *ast.CompositeLit) (map[string]*Fi
 		if err != nil {
 			return nil, err
 		}
-		if val == nil {
-			log.Printf("can't process field `%s`", key)
-			continue
-		}
 		result[key] = val
 	}
 	return result, nil

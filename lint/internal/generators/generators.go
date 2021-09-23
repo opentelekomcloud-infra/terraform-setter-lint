@@ -174,11 +174,7 @@ func (g Generator) extendedMatch(typ core.Type, expected string) bool {
 	if pkgID == "" {
 		return base
 	}
-	scope, ok := g.scopeCache[pkgID]
-	if !ok {
-		log.Printf("no cached package with ID %s", pkgID)
-		return base
-	}
+	scope := g.scopeCache[pkgID]
 	internalType, err := g.resolveLocalType(typ.Name(), scope.Package)
 	if err != nil {
 		log.Printf("error resolving local type")

@@ -3,7 +3,6 @@ package core
 import (
 	"fmt"
 	"go/ast"
-	"go/token"
 	"path/filepath"
 	"strings"
 
@@ -11,9 +10,6 @@ import (
 )
 
 func UnwrapString(lit *ast.BasicLit) (string, error) {
-	if lit.Kind != token.STRING {
-		return "", fmt.Errorf("value is not a string")
-	}
 	return strings.Trim(lit.Value, `"'`), nil
 }
 
@@ -57,7 +53,7 @@ func ResolveImportedDeclaration(expr *ast.SelectorExpr, pkg *packages.Package) (
 			return dcl, imp, nil
 		}
 	}
-	return nil, nil, fmt.Errorf("failed to resolve imported declaration %s.%s", pkgName, fnName)
+	return nil, nil, fmt.Errorf("failed to resolve imported declaration %s.%s", pkgName, fnName) // pragma:nocover
 }
 
 type FunctionReference struct {
