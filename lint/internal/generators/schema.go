@@ -3,7 +3,6 @@ package generators
 import (
 	"fmt"
 	"go/ast"
-	"log"
 	"strings"
 
 	"github.com/opentelekomcloud-infra/terraform-setter-lint/lint/internal/core"
@@ -25,29 +24,17 @@ func (g *Generator) LoadSchema(lit *ast.CompositeLit) error {
 		if !ok {
 			continue
 		}
-		k, ok := kv.Key.(*ast.Ident)
-		if !ok {
-			log.Printf("failed to parse field key")
-			continue
-		}
-		if usedFnNames.Contains(k.Name) {
-			ident, ok := kv.Value.(*ast.Ident)
-			if !ok {
-				log.Printf("can't parse %s field", k.Name)
-				continue
-			}
+		key := kv.Key.(*ast.Ident)
+		if usedFnNames.Contains(key.Name) {
+			ident := kv.Value.(*ast.Ident)
 			if ident.Obj == nil {
 				continue
 			}
-			fnDecl, ok := ident.Obj.Decl.(*ast.FuncDecl)
-			if !ok {
-				log.Printf("%s is not a function declaration", ident.Obj.Name)
-				continue
-			}
+			fnDecl := ident.Obj.Decl.(*ast.FuncDecl)
 			g.OperatingFns = append(g.OperatingFns, fnDecl)
 			continue
 		}
-		if k.Name == "Schema" {
+		if key.Name == "Schema" {
 			cmp, ok := kv.Value.(*ast.CompositeLit)
 			if !ok {
 				return fmt.Errorf("can't find schema definition in a `Schema` field")

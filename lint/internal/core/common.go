@@ -26,9 +26,6 @@ func MethodName(receiver, fnc string) string {
 	if receiver == "" {
 		return fnc
 	}
-	if filepath.Ext(fnc) != "" {
-		return fnc // already bind to package
-	}
 	return fmt.Sprintf("%s.%s", receiver, fnc)
 }
 
