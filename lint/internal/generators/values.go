@@ -8,7 +8,6 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/opentelekomcloud-infra/terraform-setter-lint/lint/internal/core"
@@ -70,21 +69,12 @@ func (g Generator) getCachedFunctionType(methodName string, scope *core.Scope) (
 }
 
 func (g Generator) getStructMethodTypes(funcName, receiverName string, pkg *packages.Package) (*core.FuncType, error) {
-	depID, structName, err := getPkgAndMember(receiverName)
-	if err == nil {
-		pkg, err = importByName(pkg, depID)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		structName = receiverName
-	}
 	scope, err := g.getCachedScope(pkg)
 	if err != nil {
 		return nil, err
 	}
 	// get struct and its parents
-	child, ok := scope.StructDecls[structName]
+	child, ok := scope.StructDecls[receiverName]
 	if !ok {
 		return nil, fmt.Errorf("can't find struct with name %s", receiverName)
 	}
@@ -100,7 +90,7 @@ func (g Generator) getStructMethodTypes(funcName, receiverName string, pkg *pack
 		}
 	}
 	if typ == nil {
-		return nil, fmt.Errorf("can't find types for method %s", core.MethodName(structName, funcName))
+		return nil, fmt.Errorf("can't find types for method %s", core.MethodName(receiverName, funcName))
 	}
 	return typ, nil
 }
@@ -243,36 +233,6 @@ func (g Generator) getExpType(r ast.Expr, pkg *packages.Package) (core.Type, err
 		default:
 			return nil, fmt.Errorf("can't use non-callable type in call")
 		}
-	case *ast.FuncType:
-		var args []core.Type
-		var results []core.Type
-		for _, a := range exp.Params.List {
-			argT, err := g.getFieldType(a, pkg)
-			if err != nil {
-				return nil, fmt.Errorf("error getting function argument types: %w", err)
-			}
-			args = append(args, argT)
-		}
-		for _, a := range exp.Results.List {
-			resT, err := g.getFieldType(a, pkg)
-			if err != nil {
-				return nil, fmt.Errorf("error getting function result types: %w", err)
-			}
-			results = append(results, resT)
-		}
-		key := randomName("func")
-		fnType := &core.FuncType{
-			FName:   key,
-			Args:    args,
-			Results: results,
-		}
-		pScope, err := g.getCachedScope(pkg)
-		if err != nil {
-			return nil, fmt.Errorf("error getting package scope for %s: %w", pkg.ID, err)
-		}
-		fnType.BindToPackage(pkg.ID)
-		pScope.FuncTypes[key] = fnType
-		return fnType, nil
 	case *ast.IndexExpr:
 		return g.getIndexExprType(exp, pkg)
 	case *ast.StructType: // locally defined types
@@ -302,11 +262,6 @@ func (g Generator) getExpType(r ast.Expr, pkg *packages.Package) (core.Type, err
 		}
 	case *ast.CompositeLit:
 		return nil, nil
-	case *ast.ChanType:
-		if exp.Dir != ast.RECV {
-			return nil, fmt.Errorf("this channel is a recevier, we can't get a data from it")
-		}
-		return g.getExpType(exp.Value, pkg)
 	}
 	return &core.StubType{}, nil
 }
@@ -615,16 +570,6 @@ func (g Generator) fieldsToMap(lst *ast.FieldList, pkg *packages.Package) (Struc
 		}
 	}
 	return fields, nil
-}
-
-var elRe = regexp.MustCompile(`(.+)\.(\w+?)$`)
-
-func getPkgAndMember(typeName string) (string, string, error) {
-	parts := elRe.FindStringSubmatch(typeName)
-	if len(parts) < 3 {
-		return "", "", fmt.Errorf("not valid struct type: %s", typeName)
-	}
-	return parts[1], parts[2], nil
 }
 
 func importByName(pkg *packages.Package, name string) (*packages.Package, error) {
