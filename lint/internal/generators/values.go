@@ -419,23 +419,6 @@ func builtinScope() *ast.Scope {
 
 var builtIns = builtinScope()
 
-func (g Generator) getTypeNameOnly(exp ast.Expr) (string, error) {
-	// finding name is a shallow operation in most cases, not going deep inside
-	switch e := exp.(type) {
-	case *ast.Ident:
-		return e.Name, nil
-	case *ast.SelectorExpr:
-		xName, err := g.getTypeNameOnly(e.X)
-		if err != nil {
-			return "", nil
-		}
-		return core.MethodName(xName, e.Sel.Name), nil
-	case *ast.StarExpr:
-		return g.getTypeNameOnly(e.X)
-	}
-	return "", fmt.Errorf("getting name is not supported for expression")
-}
-
 func (g Generator) getTypeSpec(spec *ast.TypeSpec, pkg *packages.Package) (core.Type, error) {
 	pScope, err := g.getCachedScope(pkg)
 	if err != nil {
@@ -498,7 +481,7 @@ func (g Generator) resolveLocalType(name string, pkg *packages.Package) (core.Ty
 		if tp, ok := scope.StructTypes[t.Name.Name]; ok {
 			return tp, nil
 		}
-		st, err := g.getTypeNameOnly(t.Type)
+		st, err := core.GetTypeNameOnly(t.Type)
 		if err != nil {
 			return g.getTypeSpec(t, pkg)
 		}
@@ -766,7 +749,7 @@ func (g Generator) getFuncReceiverName(fDecl *ast.FuncDecl) (string, error) {
 		return "", nil
 	}
 	if f := fDecl.Recv.List[0]; f != nil {
-		recvType, err := g.getTypeNameOnly(f.Type)
+		recvType, err := core.GetTypeNameOnly(f.Type)
 		if err != nil {
 			return "", err
 		}

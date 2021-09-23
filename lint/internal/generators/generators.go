@@ -25,7 +25,7 @@ type Generator struct {
 	FSet         *token.FileSet
 	Pkg          *packages.Package
 	Name         string
-	Schema       map[string]Field
+	Schema       map[string]*Field
 	OperatingFns []*ast.FuncDecl
 
 	scopeCache map[string]*core.Scope // scopes of any imported library, populated lazily
@@ -105,7 +105,7 @@ func (g Generator) getKey(key string) (*Field, error) {
 	if !ok {
 		return nil, fmt.Errorf("field missing in the schema defined in `%s`", g.Name)
 	}
-	return &fld, nil
+	return fld, nil
 }
 
 func (g Generator) ValidateSetters() error {
