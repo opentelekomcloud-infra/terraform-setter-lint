@@ -110,13 +110,14 @@ func TestValidateNegativeBadTypes(t *testing.T) {
 	require.Error(t, err)
 	t.Log(err)
 	me := err.(*multierror.Error)
-	assert.Len(t, me.Errors, 2)
+	assert.Len(t, me.Errors, 3)
 }
 
 func TestValidateAcceptance(t *testing.T) {
 	err := lint.Validate(fixturePath("complicated"))
 	require.NoError(t, err)
 }
+
 func TestValidateAcceptance2(t *testing.T) {
 	providerPath := "../../terraform-provider-opentelekomcloud"
 	if _, err := os.Open(providerPath); os.IsNotExist(err) {

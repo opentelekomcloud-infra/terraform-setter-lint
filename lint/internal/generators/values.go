@@ -486,11 +486,19 @@ func (g Generator) getIdentType(ident *ast.Ident, pkg *packages.Package) (core.T
 	}
 	if ident.Obj == nil {
 		name := ident.Name
-		typ := &core.SimpleType{Value: name}
-		if b := builtIns.Lookup(name); b == nil {
-			typ.BindToPackage(pkg.ID)
+		sType := &core.SimpleType{Value: name}
+		if b := builtIns.Lookup(name); b != nil {
+			return sType, nil
 		}
-		return typ, nil
+		scope, err := g.getCachedScope(pkg)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := scope.Objects[name]; ok {
+			sType.BindToPackage(pkg.ID)
+			return sType, nil
+		}
+		return nil, fmt.Errorf("unknown type of item `%s` in package `%s`", name, pkg.ID)
 	}
 	decl := ident.Obj.Decl
 	switch d := decl.(type) {
