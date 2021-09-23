@@ -132,6 +132,7 @@ func resourceIdentityRoleAssignmentV3Read(_ context.Context, d *schema.ResourceD
 		d.Set("user_id", userID),
 		d.Set("role_id", roleAssignment.ID),
 		d.Set("localWithReturn", "test"),
+		d.Set("read_only_field", asd),
 	)
 	if err := mErr.ErrorOrNil(); err != nil {
 		return diag.FromErr(err)
