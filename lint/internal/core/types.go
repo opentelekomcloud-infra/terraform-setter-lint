@@ -188,12 +188,6 @@ func GetTypeNameOnly(exp ast.Expr) (string, error) {
 	switch e := exp.(type) {
 	case *ast.Ident:
 		return e.Name, nil
-	case *ast.SelectorExpr:
-		xName, err := GetTypeNameOnly(e.X)
-		if err != nil {
-			return "", nil
-		}
-		return MethodName(xName, e.Sel.Name), nil
 	case *ast.StarExpr:
 		return GetTypeNameOnly(e.X)
 	}

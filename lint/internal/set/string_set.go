@@ -14,13 +14,6 @@ func (s *StringSet) Push(v ...string) {
 	}
 }
 
-func (s *StringSet) Items() (res []string) {
-	for v := range s.hash {
-		res = append(res, v)
-	}
-	return
-}
-
 func (s *StringSet) Contains(el string) bool {
 	_, ok := s.hash[el]
 	return ok

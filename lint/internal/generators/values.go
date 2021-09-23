@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 
 	"github.com/opentelekomcloud-infra/terraform-setter-lint/lint/internal/core"
@@ -239,7 +238,7 @@ func (g Generator) getExpType(r ast.Expr, pkg *packages.Package) (core.Type, err
 		switch t := typ.(type) {
 		case *core.FuncType:
 			return t.Results[0], err
-		case *core.WrapperType, *core.SimpleType:
+		case *core.SimpleType:
 			return t, err
 		default:
 			return nil, fmt.Errorf("can't use non-callable type in call")
@@ -433,19 +432,7 @@ func (g Generator) getTypeSpec(spec *ast.TypeSpec, pkg *packages.Package) (core.
 	// second, just get parent name
 	baseType, err := g.getExpType(spec.Type, pkg)
 	if err != nil { // if there is no parent name
-		// maybe this is just a struct definition?
-		tt, ok := spec.Type.(*ast.StructType)
-		if !ok {
-			return nil, fmt.Errorf("error getting wrapped type: %w", err)
-		}
-		fMap, err := g.fieldsToMap(tt.Fields, pkg)
-		if err != nil {
-			return nil, err
-		}
-		sType := &core.StructType{Value: name, Fields: fMap}
-		sType.BindToPackage(pkg.ID)
-		pScope.StructTypes[name] = sType // dirty trick to avoid duplications
-		return sType, nil
+		return nil, fmt.Errorf("error getting wrapper base type: %w", err)
 	}
 	// if it's ok, just remember to resolve it later
 	wType := &core.WrapperType{
@@ -501,9 +488,6 @@ func (g Generator) getIdentType(ident *ast.Ident, pkg *packages.Package) (core.T
 		name := ident.Name
 		typ := &core.SimpleType{Value: name}
 		if b := builtIns.Lookup(name); b == nil {
-			if name == "float" {
-				runtime.Breakpoint()
-			}
 			typ.BindToPackage(pkg.ID)
 		}
 		return typ, nil
