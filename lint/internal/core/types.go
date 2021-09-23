@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"go/ast"
 
 	"github.com/opentelekomcloud-infra/terraform-setter-lint/lint/internal/set"
 )
@@ -180,4 +181,21 @@ func (i *InterfaceType) String() string {
 
 func (i *InterfaceType) Matches(string) bool {
 	return true
+}
+
+func GetTypeNameOnly(exp ast.Expr) (string, error) {
+	// finding name is a shallow operation in most cases, not going deep inside
+	switch e := exp.(type) {
+	case *ast.Ident:
+		return e.Name, nil
+	case *ast.SelectorExpr:
+		xName, err := GetTypeNameOnly(e.X)
+		if err != nil {
+			return "", nil
+		}
+		return MethodName(xName, e.Sel.Name), nil
+	case *ast.StarExpr:
+		return GetTypeNameOnly(e.X)
+	}
+	return "", fmt.Errorf("getting name is not supported for expression")
 }

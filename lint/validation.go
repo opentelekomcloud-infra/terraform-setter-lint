@@ -1,7 +1,6 @@
 package lint
 
 import (
-	"go/ast"
 	"go/token"
 	"log"
 
@@ -26,56 +25,12 @@ func Validate(path string) error {
 	if err != nil {
 		return err
 	}
-	validr := validator{
-		pkgs:     pkgs,
-		fset:     fSet,
-		pkgCache: map[string]*core.Scope{},
-	}
-	return validr.validatePackages()
-}
 
-// validator is a global validation storage
-type validator struct {
-	// pkgs - list of checked packages
-	pkgs []*packages.Package
-	// fset - shared FilSet
-	fset *token.FileSet
-	// pkgCache - a map for imported package caching
-	pkgCache map[string]*core.Scope
-}
-
-func (v *validator) validatePackages() error {
 	var mErr *multierror.Error
-	for _, pkg := range v.pkgs {
-		mErr = multierror.Append(mErr, v.validatePackage(pkg))
-	}
-	return mErr.ErrorOrNil()
-}
-
-func (v *validator) validatePackage(pkg *packages.Package) error {
-	p := parser.NewParser(pkg, v.fset, v.pkgCache) // we need this state to use types and imports later
-	fnNames := p.GeneratorNames()
-	if fnNames == nil {
-		return nil
-	}
-	mErr := &multierror.Error{}
-	for _, name := range fnNames {
-		fnObj := p.FindFnObject(name)
-		ast.Inspect(fnObj.Decl.(*ast.FuncDecl), func(node ast.Node) bool {
-			lit, ok := node.(*ast.CompositeLit)
-			if !ok {
-				return true
-			}
-			if t, ok := lit.Type.(*ast.SelectorExpr); !ok || t.Sel.Name != "Resource" {
-				return true
-			}
-			gen, err := p.ParseGenerator(lit, name)
-			if err != nil {
-				log.Println(err)
-			}
-			mErr = multierror.Append(mErr, gen.ValidateSetters())
-			return false
-		})
+	pkgCache := map[string]*core.Scope{}
+	for _, pkg := range pkgs {
+		p := parser.NewParser(pkg, fSet, pkgCache) // we need this state to use types and imports later
+		mErr = multierror.Append(mErr, p.Validate())
 	}
 	return mErr.ErrorOrNil()
 }
