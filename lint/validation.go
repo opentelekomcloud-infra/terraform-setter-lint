@@ -1,6 +1,7 @@
 package lint
 
 import (
+	"fmt"
 	"go/token"
 	"log"
 
@@ -23,7 +24,7 @@ func Validate(path string) error {
 	log.Println("Start validating packages at", path)
 	pkgs, err := packages.Load(cfg, "./...")
 	if err != nil {
-		return err
+		return fmt.Errorf("error loading packages: %w", err)
 	}
 
 	var mErr *multierror.Error

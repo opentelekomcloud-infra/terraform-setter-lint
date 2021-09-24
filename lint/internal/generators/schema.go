@@ -102,7 +102,7 @@ func (g Generator) parseImportedFieldGenFn(expr *ast.SelectorExpr) (*Field, erro
 	}
 	imp, err := importByName(g.Pkg, absImport)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to resolve imported function: %w", err)
 	}
 	scope, err := g.getCachedScope(imp)
 	if err != nil {

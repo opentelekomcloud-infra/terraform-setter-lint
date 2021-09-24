@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"fmt"
 	"go/ast"
 	"go/token"
 	"log"
@@ -19,8 +20,6 @@ type PackageParser struct {
 	scopeCache map[string]*core.Scope
 }
 
-const schemaImportPath = "github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-
 func NewParser(pkg *packages.Package, set *token.FileSet, scopeCache map[string]*core.Scope) *PackageParser {
 	p := &PackageParser{
 		pkg:        pkg,
@@ -33,11 +32,11 @@ func NewParser(pkg *packages.Package, set *token.FileSet, scopeCache map[string]
 func (p PackageParser) ParseGenerator(lit *ast.CompositeLit, genName string) (*generators.Generator, error) {
 	gen, err := generators.NewGenerator(genName, p.fSet, p.pkg, p.scopeCache)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error creating generator: %w", err)
 	}
 	err = gen.LoadSchema(lit)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error loading generator schema: %w", err)
 	}
 	return gen, nil
 }
@@ -45,14 +44,13 @@ func (p PackageParser) ParseGenerator(lit *ast.CompositeLit, genName string) (*g
 func getSchemaImportName(file *ast.File) string {
 	for _, imp := range file.Imports {
 		val, _ := core.UnwrapString(imp.Path)
-		if val != schemaImportPath {
+		if val != core.SchemaImportPath {
 			continue
 		}
 		if imp.Name != nil {
 			return imp.Name.Name
-		} else {
-			return filepath.Base(val) // set alias to module name
 		}
+		return filepath.Base(val) // set alias to module name
 	}
 	return ""
 }
@@ -116,5 +114,5 @@ func (p PackageParser) Validate() error {
 			return false
 		})
 	}
-	return mErr.ErrorOrNil()
+	return mErr
 }
