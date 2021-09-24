@@ -124,42 +124,7 @@ func (g Generator) ValidateSetters() error {
 					log.Print("d.Set call has invalid argument number")
 					return false
 				}
-				keyExpr, ok := call.Args[0].(*ast.BasicLit)
-				if !ok {
-					// expected to find a string literal as a key, ignoring this setter
-					return false
-				}
-				key := strings.Trim(keyExpr.Value, `"`)
-
-				// position for error messages
-				pos := g.FSet.Position(call.Pos())
-				pos.Column = 0 // no need for such details
-				pos.Filename = simplifyPath(pos.Filename)
-
-				fld, err := g.getKey(key)
-				if err != nil {
-					mErr = multierror.Append(mErr, fmt.Errorf(
-						"%s - broken setter for field `%s`: %w", pos.String(), key, err,
-					))
-					return false
-				}
-				typ, err := g.getExpType(call.Args[1], g.Pkg)
-				if err != nil {
-					mErr = multierror.Append(mErr, fmt.Errorf(
-						"%s - error getting `%s` value type: %w", pos.String(), key, err,
-					))
-					return false
-				}
-				expected := typeMapping[fld.Type]
-				if typ == nil {
-					return false
-				}
-				if !typ.Matches(expected) && !g.extendedMatch(typ, expected) {
-					mErr = multierror.Append(mErr, fmt.Errorf(
-						"%s - field `%s` has invalid type `%s`, expected `%s`",
-						pos.String(), key, typ.String(), expected,
-					))
-				}
+				mErr = multierror.Append(mErr, g.validateSetter(call))
 				return false
 			}
 			return true
@@ -168,8 +133,50 @@ func (g Generator) ValidateSetters() error {
 	return mErr.ErrorOrNil()
 }
 
+func (g Generator) validateSetter(call *ast.CallExpr) error {
+	keyExpr, ok := call.Args[0].(*ast.BasicLit)
+	if !ok {
+		// expected to find a string literal as a key, ignoring this setter
+		return nil
+	}
+	key := strings.Trim(keyExpr.Value, `"`)
+
+	// position for error messages
+	pos := g.FSet.Position(call.Pos())
+	pos.Column = 0 // no need for such details
+	pos.Filename = simplifyPath(pos.Filename)
+
+	fld, err := g.getKey(key)
+	if err != nil {
+		return fmt.Errorf(
+			"%s - broken setter for field `%s`: %w", pos.String(), key, err,
+		)
+	}
+	typ, err := g.getExpType(call.Args[1], g.Pkg)
+	if err != nil {
+		return fmt.Errorf(
+			"%s - error getting `%s` value type: %w", pos.String(), key, err,
+		)
+	}
+	if typ == nil {
+		return fmt.Errorf("%s - can't determine expression type for field `%s`", pos.String(), key)
+	}
+	expected := typeMapping[fld.Type]
+	if !g.extendedMatch(typ, expected) {
+		return fmt.Errorf(
+			"%s - field `%s` has invalid type `%s`, expected `%s`",
+			pos.String(), key, typ.String(), expected,
+		)
+	}
+	return nil
+}
+
 func (g Generator) extendedMatch(typ core.Type, expected string) bool {
 	base := typ.Matches(expected)
+	if base {
+		return true
+	}
+
 	pkgID := typ.Package()
 	if pkgID == "" {
 		return base

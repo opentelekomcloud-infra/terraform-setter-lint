@@ -7,6 +7,8 @@ import (
 	"github.com/opentelekomcloud-infra/terraform-setter-lint/lint/internal/set"
 )
 
+const SchemaImportPath = "github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+
 type Type interface {
 	String() string
 	Matches(expected string) bool
@@ -63,7 +65,16 @@ type WrapperType struct {
 	Wrapped Type
 }
 
+// knownWrappers describes wrapper types that have known expected types
+var knownWrappers = map[string]string{
+	MethodName(SchemaImportPath, "Set"): "array",
+}
+
 func (w *WrapperType) Matches(expected string) bool {
+	st, ok := knownWrappers[w.String()]
+	if ok {
+		return st == expected
+	}
 	return w.Wrapped.Matches(expected)
 }
 

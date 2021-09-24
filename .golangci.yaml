@@ -1,3 +1,7 @@
+run:
+  skip-dirs:
+    - tests
+
 linters:
   enable:
     - cyclop
@@ -12,3 +16,9 @@ linters:
     - unparam
     - wrapcheck
   fast: false
+
+linters-settings:
+  wrapcheck:
+    ignoreSigs:
+      - .ErrorOrNil(
+      - .Errorf(

@@ -35,8 +35,7 @@ func discoverParents(base *ast.GenDecl) []string {
 	res := make([]string, 0)
 	spec := base.Specs[0]
 	typeSpec := spec.(*ast.TypeSpec)
-	switch ts := typeSpec.Type.(type) {
-	case *ast.StructType:
+	if ts, ok := typeSpec.Type.(*ast.StructType); ok {
 		for _, f := range ts.Fields.List {
 			if len(f.Names) == 0 { // methods will be included
 				ident, ok := f.Type.(*ast.Ident)
@@ -180,39 +179,83 @@ func (g Generator) packageScope(pkg *packages.Package) (s *core.Scope, err error
 }
 
 func randomName(prefix string) string {
-	val := fmt.Sprintf("%s%08d", prefix, rand.Intn(0xffffff))
+	val := fmt.Sprintf("%s%08d", prefix, rand.Intn(0xffffff)) //nolint:gosec
 	return val
 }
 
-func (g Generator) getExpType(r ast.Expr, pkg *packages.Package) (core.Type, error) {
+func (g Generator) getSingleCallResult(exp *ast.CallExpr, pkg *packages.Package) (core.Type, error) {
+	// we need only one call result
+	typ, err := g.getExpType(exp.Fun, pkg)
+	if err != nil {
+		return nil, fmt.Errorf("error fiding called function: %w", err)
+	}
+	switch t := typ.(type) {
+	case *core.FuncType:
+		return t.Results[0], err
+	case *core.SimpleType:
+		return t, err
+	default:
+		return nil, fmt.Errorf("can't use non-callable type in call")
+	}
+}
+
+func (g Generator) getMapType(m *ast.MapType, pkg *packages.Package) (core.Type, error) {
+	valType, err := g.getExpType(m.Value, pkg)
+	if err != nil {
+		return nil, fmt.Errorf("error getting map value type: %w", err)
+	}
+	keyType, err := g.getExpType(m.Key, pkg)
+	if err != nil {
+		return nil, fmt.Errorf("error getting map value type: %w", err)
+	}
+	keySimple, ok := keyType.(*core.SimpleType)
+	if !ok {
+		return nil, fmt.Errorf("can't use not simple type as a map key")
+	}
+	return &core.MapType{KeyType: keySimple, ValueType: valType}, nil
+}
+
+func (g Generator) getArrayType(a *ast.ArrayType, pkg *packages.Package) (core.Type, error) {
+	elemType, err := g.getExpType(a.Elt, pkg)
+	if err != nil {
+		return nil, fmt.Errorf("error getting array element type: %w", err)
+	}
+	return &core.ArrayType{ItemType: elemType}, nil
+}
+
+func (g Generator) getStructType(s *ast.StructType, pkg *packages.Package) (core.Type, error) {
 	pScope, err := g.getCachedScope(pkg)
 	if err != nil {
 		return nil, fmt.Errorf("error getting package scope for %s: %w", pkg.ID, err)
 	}
 
+	key := randomName("struct")
+	strct, err := g.fieldsToMap(s.Fields, pkg)
+	if err != nil {
+		return nil, err
+	}
+	sType := &core.StructType{Value: key, Fields: strct}
+	sType.BindToPackage(pkg.ID)
+	pScope.StructTypes[key] = sType
+	return sType, nil
+}
+
+func (g Generator) getBasicLitType(r *ast.BasicLit) (core.Type, error) {
+	tt, ok := tokenToType[r.Kind]
+	if !ok {
+		return nil, fmt.Errorf("unresolved basic literal type: %s", r.Kind.String())
+	}
+	return &core.SimpleType{Value: tt}, nil
+}
+
+func (g Generator) getExpType(r ast.Expr, pkg *packages.Package) (core.Type, error) { //nolint:cyclop
 	switch exp := r.(type) {
 	case *ast.ArrayType:
-		elemType, err := g.getExpType(exp.Elt, pkg)
-		if err != nil {
-			return nil, fmt.Errorf("error getting array element type: %w", err)
-		}
-		return &core.ArrayType{ItemType: elemType}, nil
+		return g.getArrayType(exp, pkg)
 	case *ast.Ident:
 		return g.getIdentType(exp, pkg)
 	case *ast.MapType:
-		valType, err := g.getExpType(exp.Value, pkg)
-		if err != nil {
-			return nil, fmt.Errorf("error getting map value type: %w", err)
-		}
-		keyType, err := g.getExpType(exp.Key, pkg)
-		if err != nil {
-			return nil, fmt.Errorf("error getting map value type: %w", err)
-		}
-		keySimple, ok := keyType.(*core.SimpleType)
-		if !ok {
-			return nil, fmt.Errorf("can't use not simple type as a map key")
-		}
-		return &core.MapType{KeyType: keySimple, ValueType: valType}, nil
+		return g.getMapType(exp, pkg)
 	case *ast.SelectorExpr:
 		return g.getSelectorType(exp, pkg)
 	case *ast.StarExpr:
@@ -220,48 +263,23 @@ func (g Generator) getExpType(r ast.Expr, pkg *packages.Package) (core.Type, err
 	case *ast.InterfaceType:
 		return &core.InterfaceType{}, nil
 	case *ast.CallExpr:
-		// we need only one call result
-		typ, err := g.getExpType(exp.Fun, pkg)
-		if err != nil {
-			return nil, fmt.Errorf("error fiding called function: %w", err)
-		}
-		switch t := typ.(type) {
-		case *core.FuncType:
-			return t.Results[0], err
-		case *core.SimpleType:
-			return t, err
-		default:
-			return nil, fmt.Errorf("can't use non-callable type in call")
-		}
+		return g.getSingleCallResult(exp, pkg)
 	case *ast.IndexExpr:
 		return g.getIndexExprType(exp, pkg)
 	case *ast.StructType: // locally defined types
-		key := randomName("struct")
-		strct, err := g.fieldsToMap(exp.Fields, pkg)
-		if err != nil {
-			return nil, err
-		}
-		sType := &core.StructType{Value: key, Fields: strct}
-		sType.BindToPackage(pkg.ID)
-		pScope.StructTypes[key] = sType
-		return sType, nil
+		return g.getStructType(exp, pkg)
 	case *ast.TypeAssertExpr:
 		return g.getExpType(exp.Type, pkg)
 	case *ast.BasicLit:
-		tt, ok := tokenToType[exp.Kind]
-		if !ok {
-			return nil, fmt.Errorf("unresolved basic literal type: %s", exp.Kind.String())
-		}
-		return &core.SimpleType{Value: tt}, nil
+		return g.getBasicLitType(exp)
 	case *ast.UnaryExpr:
 		return g.getUnaryExprType(exp, pkg)
 	case *ast.BinaryExpr:
-		switch exp.Op {
-		case token.EQL:
+		if exp.Op == token.EQL {
 			return &core.SimpleType{Value: "bool"}, nil
 		}
 	case *ast.CompositeLit:
-		return nil, nil
+		return g.getExpType(exp.Type, pkg)
 	}
 	return &core.StubType{}, nil
 }
@@ -302,6 +320,45 @@ func (g Generator) getFunctionTypes(decl *ast.FuncDecl, pkg *packages.Package) (
 	return ft, nil
 }
 
+func (g Generator) getSelectorCallTypes(sel *ast.SelectorExpr, pkg *packages.Package) (*core.FuncType, error) {
+	var memberName string
+	var pkgName string
+	switch x := sel.X.(type) {
+	case *ast.CallExpr:
+		xType, err := g.getCallTypes(x, pkg)
+		if err != nil {
+			return nil, fmt.Errorf("error getting recursive func types: %w", err)
+		}
+		memberName = xType.Results[0].Name()
+		pkgName = xType.Results[0].Package()
+	default:
+		xType, err := g.getSelectorType(sel, pkg)
+		if err != nil {
+			return nil, err
+		}
+		memberName = xType.Name()
+		pkgName = xType.Package()
+	}
+	dep, err := importByName(pkg, pkgName)
+	if err != nil {
+		return nil, err
+	}
+
+	scope, err := g.getCachedScope(dep)
+	if err != nil {
+		return nil, err
+	}
+	fType, err := g.getCachedFunctionType(memberName, scope)
+	if err == nil {
+		return fType, nil
+	}
+	structType, ok := scope.Objects[memberName]
+	if !ok {
+		return nil, fmt.Errorf("struct %s is not found in package %s", memberName, dep.ID)
+	}
+	return g.getStructMethodTypes(sel.Sel.Name, structType.Name, dep)
+}
+
 func (g Generator) getCallTypes(call *ast.CallExpr, pkg *packages.Package) (*core.FuncType, error) {
 	pScope, err := g.getCachedScope(pkg)
 	if err != nil {
@@ -324,42 +381,7 @@ func (g Generator) getCallTypes(call *ast.CallExpr, pkg *packages.Package) (*cor
 		}
 		return g.getCachedFunctionType(fn.Name, pScope)
 	case *ast.SelectorExpr:
-		var memberName string
-		var pkgName string
-		switch x := fn.X.(type) {
-		case *ast.CallExpr:
-			xType, err := g.getCallTypes(x, pkg)
-			if err != nil {
-				return nil, fmt.Errorf("error getting recursive func types: %w", err)
-			}
-			memberName = xType.Results[0].Name()
-			pkgName = xType.Results[0].Package()
-		default:
-			xType, err := g.getSelectorType(fn, pkg)
-			if err != nil {
-				return nil, err
-			}
-			memberName = xType.Name()
-			pkgName = xType.Package()
-		}
-		dep, err := importByName(pkg, pkgName)
-		if err != nil {
-			return nil, err
-		}
-
-		scope, err := g.getCachedScope(dep)
-		if err != nil {
-			return nil, err
-		}
-		fType, err := g.getCachedFunctionType(memberName, scope)
-		if err == nil {
-			return fType, nil
-		}
-		structType, ok := scope.Objects[memberName]
-		if !ok {
-			return nil, fmt.Errorf("struct %s is not found in package %s", memberName, dep.ID)
-		}
-		return g.getStructMethodTypes(fn.Sel.Name, structType.Name, dep)
+		return g.getSelectorCallTypes(fn, pkg)
 	}
 	return nil, fmt.Errorf("can't get function declaration for call")
 }
@@ -435,66 +457,79 @@ func (g Generator) resolveLocalType(name string, pkg *packages.Package) (core.Ty
 	return wrapper, nil
 }
 
+func findArgumentPosition(name string, a *ast.AssignStmt) int {
+	// if it was assigned, we will search on the left side for the name
+	pos := -1
+	// find argument position
+	for i, l := range a.Lhs {
+		lv, ok := l.(*ast.Ident)
+		if !ok || lv.Name != name {
+			continue // ignore other things
+		}
+		pos = i
+		break
+	}
+	return pos
+}
+
+func (g Generator) getAssignmentType(a *ast.AssignStmt, argName string, pkg *packages.Package) (core.Type, error) {
+	pos := findArgumentPosition(argName, a)
+	if pos == -1 {
+		return nil, fmt.Errorf("can't find argument position")
+	}
+	// check right side types
+	if len(a.Rhs) != 1 {
+		return nil, fmt.Errorf("can't work with number or right side values != 1")
+	}
+	var typ core.Type
+	var err error
+	switch exp := a.Rhs[0].(type) {
+	case *ast.CallExpr:
+		funTypes, err := g.getCallTypes(exp, pkg)
+		if err != nil {
+			return nil, fmt.Errorf("error getting type of function: %w", err)
+		}
+		if funTypes == nil {
+			return nil, fmt.Errorf("can't get function return types")
+		}
+		typ = funTypes.Results[pos]
+	default:
+		typ, err = g.getExpType(exp, pkg)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("error handling assignment typing: %w", err)
+	}
+	return typ, nil
+}
+
+func (g Generator) getSimpleIdentType(ident *ast.Ident, pkg *packages.Package) (core.Type, error) {
+	name := ident.Name
+	sType := &core.SimpleType{Value: name}
+	if b := builtIns.Lookup(name); b != nil {
+		return sType, nil
+	}
+	scope, err := g.getCachedScope(pkg)
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := scope.Objects[name]; ok {
+		sType.BindToPackage(pkg.ID)
+		return sType, nil
+	}
+	return nil, fmt.Errorf("unknown type of item `%s` in package `%s`", name, pkg.ID)
+}
+
 func (g Generator) getIdentType(ident *ast.Ident, pkg *packages.Package) (core.Type, error) {
 	if pkg == nil {
 		pkg = g.Pkg
 	}
 	if ident.Obj == nil {
-		name := ident.Name
-		sType := &core.SimpleType{Value: name}
-		if b := builtIns.Lookup(name); b != nil {
-			return sType, nil
-		}
-		scope, err := g.getCachedScope(pkg)
-		if err != nil {
-			return nil, err
-		}
-		if _, ok := scope.Objects[name]; ok {
-			sType.BindToPackage(pkg.ID)
-			return sType, nil
-		}
-		return nil, fmt.Errorf("unknown type of item `%s` in package `%s`", name, pkg.ID)
+		return g.getSimpleIdentType(ident, pkg)
 	}
 	decl := ident.Obj.Decl
 	switch d := decl.(type) {
 	case *ast.AssignStmt:
-		// if it was assigned, we will search on the left side for the name
-		pos := -1
-		// find argument position
-		for i, l := range d.Lhs {
-			lv, ok := l.(*ast.Ident)
-			if !ok || lv.Name != ident.Name {
-				continue // ignore other things
-			}
-			pos = i
-			break
-		}
-		if pos == -1 {
-			return nil, fmt.Errorf("can't find argument position")
-		}
-		// check right side types
-		if len(d.Rhs) != 1 {
-			return nil, fmt.Errorf("can't work with number or right side values != 1")
-		}
-		var typ core.Type
-		var err error
-		switch exp := d.Rhs[0].(type) {
-		case *ast.CallExpr:
-			funTypes, err := g.getCallTypes(exp, pkg)
-			if err != nil {
-				return nil, fmt.Errorf("error getting type of function: %w", err)
-			}
-			if funTypes == nil {
-				return nil, fmt.Errorf("can't get function return types")
-			}
-			typ = funTypes.Results[pos]
-		default:
-			typ, err = g.getExpType(exp, pkg)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("error handling assignment typing: %w", err)
-		}
-		return typ, nil
+		return g.getAssignmentType(d, ident.Name, pkg)
 	case *ast.TypeSpec:
 		return g.getTypeSpec(d, pkg)
 	case *ast.Field:
@@ -622,21 +657,21 @@ func (g Generator) getStructTypes(typ core.Type, pkg *packages.Package) (StructF
 	return nil, fmt.Errorf("invaldid type spec")
 }
 
-func (g Generator) getSelectorType(sel *ast.SelectorExpr, pkg *packages.Package) (core.Type, error) {
-	// this is import
-	if ix, ok := sel.X.(*ast.Ident); ok && ix.Obj == nil {
-		pkgAbs := g.absoluteImport(ix.Name, sel, pkg)
-		innerPkg, err := importByName(pkg, pkgAbs)
-		if err != nil {
-			return nil, err
-		}
-		resType, err := g.getExpType(sel.Sel, innerPkg)
-		if err != nil {
-			return nil, err
-		}
-		return resType, nil
+func (g Generator) getImportSelectorType(sel *ast.SelectorExpr, pkg *packages.Package) (core.Type, error) {
+	ix := sel.X.(*ast.Ident)
+	pkgAbs := g.absoluteImport(ix.Name, sel, pkg)
+	innerPkg, err := importByName(pkg, pkgAbs)
+	if err != nil {
+		return nil, err
 	}
+	resType, err := g.getExpType(sel.Sel, innerPkg)
+	if err != nil {
+		return nil, err
+	}
+	return resType, nil
+}
 
+func (g Generator) getStructSelectorType(sel *ast.SelectorExpr, pkg *packages.Package) (core.Type, error) {
 	xType, err := g.getExpType(sel.X, pkg)
 	if err != nil {
 		return nil, fmt.Errorf("error extracting `X` type: %w", err)
@@ -681,6 +716,14 @@ func (g Generator) getSelectorType(sel *ast.SelectorExpr, pkg *packages.Package)
 	return typ, nil
 }
 
+func (g Generator) getSelectorType(sel *ast.SelectorExpr, pkg *packages.Package) (core.Type, error) {
+	// this is import
+	if ix, ok := sel.X.(*ast.Ident); ok && ix.Obj == nil {
+		return g.getImportSelectorType(sel, pkg)
+	}
+	return g.getStructSelectorType(sel, pkg)
+}
+
 func (g Generator) getFuncReceiverName(fDecl *ast.FuncDecl) (string, error) {
 	if fDecl.Recv.NumFields() == 0 {
 		return "", nil
@@ -688,9 +731,9 @@ func (g Generator) getFuncReceiverName(fDecl *ast.FuncDecl) (string, error) {
 	if f := fDecl.Recv.List[0]; f != nil {
 		recvType, err := core.GetTypeNameOnly(f.Type)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("failed to get receiver name: %w", err)
 		}
-		return recvType, err
+		return recvType, nil
 	}
 	return "", nil
 }
