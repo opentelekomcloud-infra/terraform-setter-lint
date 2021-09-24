@@ -1,0 +1,14 @@
+linters:
+  enable:
+    - cyclop
+    - depguard
+    - dupl
+    - gocognit
+    - gocritic
+    - gofmt
+    - gosec
+    - revive
+    - unconvert
+    - unparam
+    - wrapcheck
+  fast: false
