@@ -3,7 +3,6 @@ package generators
 import (
 	"fmt"
 	"go/ast"
-	"strings"
 
 	"github.com/opentelekomcloud-infra/terraform-setter-lint/lint/internal/core"
 	"github.com/opentelekomcloud-infra/terraform-setter-lint/lint/internal/set"
@@ -56,7 +55,7 @@ func (g Generator) schemaDeclToMap(schemaDecl *ast.CompositeLit) (map[string]*Fi
 		if !ok {
 			return nil, fmt.Errorf("the element #%d is not a key-value element", i)
 		}
-		key := strings.Trim(kv.Key.(*ast.BasicLit).Value, `"`)
+		key, _ := core.UnwrapString(kv.Key.(*ast.BasicLit))
 		val, err := g.parseSchemaField(kv.Value)
 		if err != nil {
 			return nil, err
@@ -71,7 +70,7 @@ func (g Generator) parseSchemaField(expr ast.Expr) (*Field, error) {
 	case *ast.CompositeLit:
 		return parseComposite(v)
 	case *ast.CallExpr:
-		return g.parseCall(v)
+		return g.parseFieldGenCall(v)
 	}
 	return nil, fmt.Errorf("invalid field %+v", expr)
 }
@@ -95,12 +94,26 @@ func parseComposite(lit *ast.CompositeLit) (*Field, error) {
 	return f, nil
 }
 
-func (g Generator) parseImportedFn(expr *ast.SelectorExpr) (*Field, error) {
-	dcl, err := core.ResolveImportedFunction(expr, g.Pkg)
+func (g Generator) parseImportedFieldGenFn(expr *ast.SelectorExpr) (*Field, error) {
+	pkgName := expr.X.(*ast.Ident).Name
+	absImport := g.absoluteImport(pkgName, expr, g.Pkg)
+	if absImport == "" {
+		return nil, fmt.Errorf("can't find import with name `%s` in generator", pkgName)
+	}
+	imp, err := importByName(g.Pkg, absImport)
 	if err != nil {
 		return nil, err
 	}
-	return parseFnDeclaration(dcl.Decl)
+	scope, err := g.getCachedScope(imp)
+	if err != nil {
+		return nil, err
+	}
+	fnName := expr.Sel.Name
+	fnDecl, ok := scope.FuncDecls[fnName]
+	if !ok {
+		return nil, fmt.Errorf("can't find function with name `%s` in package `%s`", fnName, pkgName)
+	}
+	return parseFnDeclaration(fnDecl)
 }
 
 func parseFnDeclaration(decl *ast.FuncDecl) (*Field, error) {
@@ -141,14 +154,14 @@ func parseFnDeclaration(decl *ast.FuncDecl) (*Field, error) {
 	return nil, nil
 }
 
-func (g Generator) parseCall(call *ast.CallExpr) (*Field, error) {
+func (g Generator) parseFieldGenCall(call *ast.CallExpr) (*Field, error) {
 	switch fn := call.Fun.(type) {
 	case *ast.Ident:
 		// in package
 		return parseFnDeclaration(fn.Obj.Decl.(*ast.FuncDecl))
 	case *ast.SelectorExpr:
 		// imported
-		return g.parseImportedFn(fn)
+		return g.parseImportedFieldGenFn(fn)
 	}
-	return nil, nil
+	return nil, fmt.Errorf("error parsing generator field function call: unknown type of function")
 }
